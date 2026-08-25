@@ -1,0 +1,19 @@
+# build output
+/bin/
+/dist/
+hooklens
+hooklens.exe
+
+# local environment
+.env
+.env.local
+
+# editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# frontend (Phase 2)
+node_modules/
+web/dist/
