@@ -19,6 +19,10 @@ type Config struct {
 	// Addr is the TCP address the HTTP server listens on, e.g. ":8080".
 	Addr string
 
+	// DatabaseURL is the Postgres connection string used by migrations and, from
+	// Phase 1, by the application itself.
+	DatabaseURL string
+
 	// BaseDomain is the domain the app itself is served from, e.g.
 	// "hooklens.dev". A single label in front of it -- "a7f3.hooklens.dev" --
 	// is a capture inbox. See server.Resolve.
@@ -35,6 +39,9 @@ func Load() (Config, error) {
 		Env:        env("HOOKLENS_ENV", "dev"),
 		Addr:       env("HOOKLENS_ADDR", ":8080"),
 		BaseDomain: strings.ToLower(env("HOOKLENS_BASE_DOMAIN", "localhost")),
+		// Default matches compose.yaml so a fresh clone works after one
+		// `docker compose up -d` with nothing exported.
+		DatabaseURL: env("DATABASE_URL", "postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable"),
 	}
 
 	// Validate at startup, not at first use. A process that boots, reports
