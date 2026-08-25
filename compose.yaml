@@ -1,0 +1,54 @@
+# Development infrastructure only.
+#
+# The app itself is deliberately NOT a service here. Running `go run ./cmd/hooklens`
+# on the host rebuilds in under a second; going through a Docker image build on
+# every edit would cost tens of seconds and buy nothing, because the app has no
+# dependency on the Linux environment. The Dockerfile still exists and is built in
+# CI, so the image is never untested -- it is just not in the edit loop.
+name: hooklens
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: hooklens
+      POSTGRES_PASSWORD: hooklens
+      POSTGRES_DB: hooklens
+      # Passed to initdb the first time the volume is created. C collation sorts
+      # by byte value: faster than a locale-aware collation, and correct here
+      # because nothing in this database is sorted for human reading.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+
+    ports:
+      # Bound to 127.0.0.1, not 0.0.0.0. The short form "5432:5432" publishes on
+      # every interface, which on a laptop means anyone on the coffee-shop wifi
+      # can reach a Postgres whose password is "hooklens".
+      - "127.0.0.1:5432:5432"
+
+    volumes:
+      # A named volume, not a bind mount to a host directory. Two reasons: bind
+      # mounts cross the Windows/WSL2 filesystem boundary, which is slow enough
+      # for Postgres to notice, and they carry uid/gid mismatches that the
+      # postgres user trips over. A named volume lives inside the VM's own
+      # filesystem where Postgres expects to be.
+      #
+      # Mounted at /var/lib/postgresql, NOT .../data. The 18+ images changed this:
+      # data now lives in a major-version subdirectory (/var/lib/postgresql/18/docker)
+      # so that a future "pg_upgrade --link" has both versions inside one mount
+      # point. Mounting at the old .../data path makes the image refuse to start.
+      - pgdata:/var/lib/postgresql
+
+    healthcheck:
+      # pg_isready returns non-zero until the server accepts connections. Without
+      # this, `depends_on` only waits for the *container* to start, which happens
+      # several seconds before Postgres is actually listening.
+      test: ["CMD-SHELL", "pg_isready -U hooklens -d hooklens"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+
+volumes:
+  pgdata:

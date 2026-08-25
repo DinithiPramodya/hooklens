@@ -1,0 +1,7 @@
+# Normalise line endings. Without this, files committed from Windows carry CRLF,
+# and gofmt on a Linux CI runner reports every file as unformatted -- a failure
+# that cannot be reproduced locally.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary

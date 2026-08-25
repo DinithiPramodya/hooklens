@@ -1,0 +1,18 @@
+# Everything here is excluded from the build context, which is uploaded to the
+# daemon on every build. Smaller context = faster builds and fewer spurious
+# cache invalidations.
+.git
+.github
+.gitignore
+.gitattributes
+docs
+*.md
+.env
+.env.*
+bin
+dist
+node_modules
+web/dist
+compose.yaml
+Dockerfile
+.dockerignore
