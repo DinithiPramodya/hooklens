@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel an in-flight run when a newer commit lands on the same ref. Without
+# this, pushing three times in a minute queues three full runs and you wait for
+# results you no longer care about.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege, set explicitly. The default token permissions are broader than
+# any job here needs, and a third-party action runs with whatever the job holds.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+
+    # A real Postgres alongside the job, not a mock and not an in-memory
+    # substitute. The migrations use uuidv7() and a POSIX regex CHECK -- neither
+    # exists in SQLite -- so anything other than real Postgres would test a
+    # different schema than the one we ship.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: hooklens
+          POSTGRES_PASSWORD: hooklens
+          POSTGRES_DB: hooklens
+        ports:
+          - 5432:5432
+        # Same reasoning as the healthcheck in compose.yaml: the container is
+        # "started" several seconds before Postgres accepts connections. GitHub
+        # holds the job until these pass, so the first step never races the
+        # database.
+        options: >-
+          --health-cmd "pg_isready -U hooklens -d hooklens"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Read the version from go.mod rather than pinning it here, so there is
+          # one place to bump Go and no way for the two to drift apart.
+          go-version-file: go.mod
+          cache: true
+
+      # gofmt -l prints the names of misformatted files and exits 0 either way,
+      # so the exit code has to be built by hand. This is the check that would
+      # have failed on CRLF line endings before .gitattributes existed.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      # -race is the reason this job exists on Linux. The race detector requires
+      # cgo, cgo requires a C compiler, and the Windows dev machine has none --
+      # so this is the only place the detector runs. Phase 3 adds a
+      # mutex-guarded map shared across goroutines, where it earns its keep.
+      # -count=1 defeats Go's test result cache, which would otherwise report a
+      # pass without running anything.
+      - name: test (race detector)
+        run: go test ./... -race -count=1
+
+      # Exercise migrations against the real database: forward, reversed, and
+      # forward again. The down-then-up cycle is what catches a Down section that
+      # was never actually tried.
+      - name: migrations up / down / up
+        env:
+          DATABASE_URL: postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable
+        run: |
+          go run ./cmd/hooklens migrate up
+          go run ./cmd/hooklens migrate status
+          go run ./cmd/hooklens migrate down
+          go run ./cmd/hooklens migrate up
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Separate job so a lint failure is visibly distinct from a broken build,
+      # and so it runs in parallel rather than adding to the test job's time.
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Buildx enables the GitHub Actions cache backend below. The default
+      # builder cannot use type=gha.
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          build-args: VERSION=${{ github.sha }}
+          # Persist layer cache between runs. Without it every run re-downloads
+          # the module graph, which is the layer-ordering point from unit 3 made
+          # expensive.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
