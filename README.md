@@ -99,5 +99,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [06 — Reading a request body, and why the raw bytes matter](docs/learn/06-reading-a-request.md)
 - [07 — Storing a request: column types, identifiers and one index](docs/learn/07-storing-a-request.md)
 - [08 — Capability URLs: entropy, and why tokens are hashed](docs/learn/08-capability-urls.md)
+- [09 — Cursor vs offset pagination](docs/learn/09-pagination.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -324,29 +325,296 @@ func TestListRequestsOrdering(t *testing.T) {
 		t.Fatalf("InsertRequest: %v", err)
 	}
 
-	got, err := st.ListRequests(ctx, mine.ID, 10)
+	page, err := st.ListRequests(ctx, mine.ID, 10, nil)
 	if err != nil {
 		t.Fatalf("ListRequests: %v", err)
 	}
-	if len(got) != 5 {
-		t.Fatalf("got %d requests, want 5 (other inboxes must not leak in)", len(got))
+	if len(page.Requests) != 5 {
+		t.Fatalf("got %d requests, want 5 (other inboxes must not leak in)", len(page.Requests))
 	}
 	for i, want := range []string{"/4", "/3", "/2", "/1", "/0"} {
-		if got[i].Path != want {
-			t.Errorf("position %d = %s, want %s (newest first)", i, got[i].Path, want)
+		if page.Requests[i].Path != want {
+			t.Errorf("position %d = %s, want %s (newest first)", i, page.Requests[i].Path, want)
+		}
+	}
+	if page.NextCursor != "" {
+		t.Errorf("NextCursor = %q on a complete result, want empty", page.NextCursor)
+	}
+
+	// And the limit is respected, with a cursor offered because more remain.
+	page, err = st.ListRequests(ctx, mine.ID, 2, nil)
+	if err != nil || len(page.Requests) != 2 {
+		t.Fatalf("limit 2: got %d rows, %v", len(page.Requests), err)
+	}
+	if page.NextCursor == "" {
+		t.Error("NextCursor empty although 3 more rows exist")
+	}
+}
+
+func TestCursorRoundTrip(t *testing.T) {
+	want := Cursor{
+		// Nanosecond precision matters: truncating it in the encoding would
+		// make a cursor land between rows and skip one.
+		ReceivedAt: time.Date(2026, 9, 19, 12, 34, 56, 123456789, time.UTC),
+		ID:         "01a0b975-189f-7f9d-bf66-c7d94fab95b4",
+	}
+
+	got, err := ParseCursor(want.String())
+	if err != nil {
+		t.Fatalf("ParseCursor: %v", err)
+	}
+	if !got.ReceivedAt.Equal(want.ReceivedAt) {
+		t.Errorf("ReceivedAt = %v, want %v", got.ReceivedAt, want.ReceivedAt)
+	}
+	if got.ID != want.ID {
+		t.Errorf("ID = %q, want %q", got.ID, want.ID)
+	}
+
+	if strings.ContainsAny(want.String(), "+/=") {
+		t.Errorf("cursor %q is not URL-safe", want.String())
+	}
+
+	for _, bad := range []string{"not base64!", "", "AAAA", base64Raw("no-pipe-here"), base64Raw("|missing-time")} {
+		if _, err := ParseCursor(bad); !errors.Is(err, ErrBadCursor) {
+			t.Errorf("ParseCursor(%q) = %v, want ErrBadCursor", bad, err)
+		}
+	}
+}
+
+func base64Raw(s string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(s))
+}
+
+// TestCursorPaginationWalksEverything checks the boring but essential property:
+// paging all the way through returns every row exactly once, in order.
+func TestCursorPaginationWalksEverything(t *testing.T) {
+	st := testStore(t)
+	ctx := t.Context()
+
+	ep, err := st.CreateEndpoint(ctx, "")
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+
+	const total = 23
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	for i := range total {
+		if _, err := st.InsertRequest(ctx, ep.ID, &capture.Request{
+			Method: "POST", Path: fmt.Sprintf("/%02d", i), DeclaredSize: -1,
+			ReceivedAt: base.Add(time.Duration(i) * time.Millisecond),
+		}); err != nil {
+			t.Fatalf("InsertRequest: %v", err)
 		}
 	}
 
-	// And the limit is respected.
-	got, err = st.ListRequests(ctx, mine.ID, 2)
-	if err != nil || len(got) != 2 {
-		t.Errorf("limit 2: got %d rows, %v", len(got), err)
+	var (
+		seen   []string
+		cursor *Cursor
+		pages  int
+	)
+	for {
+		page, err := st.ListRequests(ctx, ep.ID, 5, cursor)
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		pages++
+		for _, r := range page.Requests {
+			seen = append(seen, r.Path)
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		c, err := ParseCursor(page.NextCursor)
+		if err != nil {
+			t.Fatalf("own cursor did not parse: %v", err)
+		}
+		cursor = &c
+
+		if pages > 20 {
+			t.Fatal("pagination did not terminate -- the cursor is not advancing")
+		}
 	}
+
+	if len(seen) != total {
+		t.Fatalf("saw %d rows over %d pages, want %d", len(seen), pages, total)
+	}
+	if pages != 5 { // 23 rows at 5 per page
+		t.Errorf("took %d pages, want 5", pages)
+	}
+	for i, path := range seen {
+		want := fmt.Sprintf("/%02d", total-1-i)
+		if path != want {
+			t.Fatalf("position %d = %s, want %s", i, path, want)
+		}
+	}
+	// No duplicates.
+	uniq := make(map[string]bool, len(seen))
+	for _, p := range seen {
+		if uniq[p] {
+			t.Errorf("row %s returned twice", p)
+		}
+		uniq[p] = true
+	}
+}
+
+// TestCursorSurvivesInserts is the whole argument for cursor pagination.
+//
+// It reads page 1, inserts new rows above it -- exactly what a live inbox does
+// -- and then reads page 2 both ways. The cursor is unaffected; OFFSET returns
+// rows the caller has already seen.
+func TestCursorSurvivesInserts(t *testing.T) {
+	st := testStore(t)
+	ctx := t.Context()
+
+	ep, err := st.CreateEndpoint(ctx, "")
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	insert := func(label string, offset time.Duration) {
+		t.Helper()
+		if _, err := st.InsertRequest(ctx, ep.ID, &capture.Request{
+			Method: "POST", Path: "/" + label, DeclaredSize: -1,
+			ReceivedAt: base.Add(offset),
+		}); err != nil {
+			t.Fatalf("InsertRequest: %v", err)
+		}
+	}
+
+	// Ten original rows, old-00 .. old-09, newest last.
+	for i := range 10 {
+		insert(fmt.Sprintf("old-%02d", i), time.Duration(i)*time.Millisecond)
+	}
+
+	// Page 1: the five newest, old-09 .. old-05.
+	p1, err := st.ListRequests(ctx, ep.ID, 5, nil)
+	if err != nil {
+		t.Fatalf("page 1: %v", err)
+	}
+	if got := p1.Requests[0].Path; got != "/old-09" {
+		t.Fatalf("page 1 starts at %s, want /old-09", got)
+	}
+	page1 := pathsOf(p1.Requests)
+
+	// Three new webhooks arrive while the user is reading page 1. In a
+	// newest-first list they land at positions 0, 1, 2 and push everything down.
+	for i := range 3 {
+		insert(fmt.Sprintf("new-%02d", i), time.Duration(100+i)*time.Millisecond)
+	}
+
+	// Page 2 by cursor.
+	c, err := ParseCursor(p1.NextCursor)
+	if err != nil {
+		t.Fatalf("ParseCursor: %v", err)
+	}
+	p2, err := st.ListRequests(ctx, ep.ID, 5, &c)
+	if err != nil {
+		t.Fatalf("page 2: %v", err)
+	}
+	cursorPage2 := pathsOf(p2.Requests)
+
+	// Page 2 by OFFSET, the naive equivalent, run directly against the database.
+	offsetPage2, err := listByOffset(ctx, st, ep.ID, 5, 5)
+	if err != nil {
+		t.Fatalf("offset query: %v", err)
+	}
+
+	t.Logf("page 1          : %v", page1)
+	t.Logf("page 2 (cursor) : %v", cursorPage2)
+	t.Logf("page 2 (offset) : %v", offsetPage2)
+
+	// The cursor continues exactly where page 1 stopped.
+	want := []string{"/old-04", "/old-03", "/old-02", "/old-01", "/old-00"}
+	if !slicesEqual(cursorPage2, want) {
+		t.Errorf("cursor page 2 = %v, want %v", cursorPage2, want)
+	}
+	if overlap := intersect(page1, cursorPage2); len(overlap) != 0 {
+		t.Errorf("cursor repeated rows from page 1: %v", overlap)
+	}
+
+	// OFFSET does not, and this is the point of the test.
+	if overlap := intersect(page1, offsetPage2); len(overlap) == 0 {
+		t.Errorf("expected OFFSET to repeat rows from page 1 after 3 inserts, but it did not "+
+			"-- page1=%v offsetPage2=%v", page1, offsetPage2)
+	} else {
+		t.Logf("OFFSET repeated %d rows already shown on page 1: %v", len(overlap), overlap)
+	}
+}
+
+// listByOffset is the naive pagination this unit exists to avoid. It lives only
+// in the test, as the thing being compared against.
+func listByOffset(ctx context.Context, st *Store, endpointID string, limit, offset int) ([]string, error) {
+	rows, err := st.pool.Query(ctx, `
+		select path from requests
+		where endpoint_id = $1
+		order by received_at desc, id desc
+		limit $2 offset $3`, endpointID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func pathsOf(rs []StoredRequest) []string {
+	out := make([]string, len(rs))
+	for i, r := range rs {
+		out[i] = r.Path
+	}
+	return out
+}
+
+func intersect(a, b []string) []string {
+	in := make(map[string]bool, len(a))
+	for _, s := range a {
+		in[s] = true
+	}
+	var out []string
+	for _, s := range b {
+		if in[s] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestIndexIsUsed asks Postgres what it actually plans to do. A test asserting
 // rows come back in the right order would pass just as happily with a
 // sequential scan and a sort -- which is the thing the index exists to avoid.
+// TestIndexIsUsed asks Postgres what it plans to do. A test asserting that rows
+// come back in the right order would pass just as happily with a sequential
+// scan and a sort -- which is the thing the index exists to avoid.
+//
+// The first version of this test ran against an almost-empty table and asserted
+// there was no Sort node. It passed by luck and then failed, because the planner
+// is COST-BASED: on a tiny table, reading every row genuinely is cheaper than
+// descending an index, and choosing the seq scan is the optimiser being right.
+// An index assertion on an empty table tests nothing at all.
+//
+// So this seeds enough rows for the index to actually be the cheaper plan, and
+// runs ANALYZE so the planner has statistics rather than its default guesses.
 func TestIndexIsUsed(t *testing.T) {
 	st := testStore(t)
 	ctx := t.Context()
@@ -356,11 +624,26 @@ func TestIndexIsUsed(t *testing.T) {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
 
+	// One statement rather than 5,000 round trips.
+	_, err = st.pool.Exec(ctx, `
+		insert into requests (endpoint_id, method, path, declared_size, received_at)
+		select $1, 'POST', '/p' || g, null, now() - (g || ' seconds')::interval
+		from generate_series(1, 5000) g`, ep.ID)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Without fresh statistics the planner works from defaults and may still
+	// choose wrong -- not because the index is bad, but because it does not
+	// know how many rows are there.
+	if _, err := st.pool.Exec(ctx, `analyze requests`); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+
 	const q = `
 		explain (format text)
 		select id from requests
 		where endpoint_id = $1
-		order by received_at desc
+		order by received_at desc, id desc
 		limit 50`
 
 	rows, err := st.pool.Query(ctx, q, ep.ID)
@@ -381,13 +664,99 @@ func TestIndexIsUsed(t *testing.T) {
 		t.Fatalf("explain: %v", err)
 	}
 
-	t.Logf("plan:\n%s", plan.String())
+	got := plan.String()
+	t.Logf("plan:\n%s", got)
 
-	// On an empty or tiny table Postgres may legitimately prefer a sequential
-	// scan -- with no rows, reading the whole table IS cheapest, and forcing an
-	// index would be wrong. So this asserts only the thing that is always true:
-	// the planner must not be sorting, because the index supplies the order.
-	if strings.Contains(plan.String(), "Sort") {
-		t.Errorf("plan contains a Sort -- the index is not supplying the ordering:\n%s", plan.String())
+	// Two assertions, and the second is the one that matters. An Index Scan
+	// alone would still be a win if it were followed by a Sort; the absence of
+	// the Sort is what proves the index supplies the ORDER BY, which is what
+	// makes deep pages cheap.
+	if !strings.Contains(got, "requests_endpoint_cursor_idx") {
+		t.Errorf("plan does not use the cursor index:\n%s", got)
+	}
+	if strings.Contains(got, "Sort") {
+		t.Errorf("plan contains a Sort -- the index is not supplying the ordering:\n%s", got)
+	}
+}
+
+// TestCursorPlanIsNotOffsetPlan shows the cost difference the unit is about.
+// Deep OFFSET reads and discards everything above it; the cursor seeks.
+func TestCursorPlanIsNotOffsetPlan(t *testing.T) {
+	st := testStore(t)
+	ctx := t.Context()
+
+	ep, err := st.CreateEndpoint(ctx, "")
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	_, err = st.pool.Exec(ctx, `
+		insert into requests (endpoint_id, method, path, declared_size, received_at)
+		select $1, 'POST', '/p' || g, null, now() - (g || ' seconds')::interval
+		from generate_series(1, 5000) g`, ep.ID)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx, `analyze requests`); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+
+	// "rows" here is rows actually read, which is the number this unit is about.
+	read := func(q string, args ...any) int {
+		t.Helper()
+		var total int
+		rows, err := st.pool.Query(ctx, "explain (analyze, format text) "+q, args...)
+		if err != nil {
+			t.Fatalf("explain analyze: %v", err)
+		}
+		defer rows.Close()
+		var plan strings.Builder
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			plan.WriteString(line + "\n")
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("explain analyze: %v", err)
+		}
+		t.Logf("%s\n%s", q, plan.String())
+		// Pull "actual ... rows=N" from the innermost scan node.
+		for _, line := range strings.Split(plan.String(), "\n") {
+			// "Scan", not "Index Scan": selecting only indexed columns gives an
+			// Index ONLY Scan, which does not contain that substring. Missing it
+			// is how this parser silently reported 0 on the first run.
+			if strings.Contains(line, "Scan") {
+				if i := strings.LastIndex(line, "rows="); i >= 0 {
+					_, _ = fmt.Sscanf(line[i:], "rows=%d", &total)
+				}
+			}
+		}
+		return total
+	}
+
+	deepOffset := read(`select id from requests where endpoint_id = $1
+		order by received_at desc, id desc limit 50 offset 4000`, ep.ID)
+
+	// The equivalent position by cursor: the 4000th row back.
+	var c Cursor
+	err = st.pool.QueryRow(ctx, `
+		select received_at, id::text from requests
+		where endpoint_id = $1
+		order by received_at desc, id desc
+		offset 3999 limit 1`, ep.ID).Scan(&c.ReceivedAt, &c.ID)
+	if err != nil {
+		t.Fatalf("find cursor position: %v", err)
+	}
+
+	byCursor := read(`select id from requests where endpoint_id = $1
+		and (received_at, id) < ($2, $3)
+		order by received_at desc, id desc limit 50`, ep.ID, c.ReceivedAt, c.ID)
+
+	t.Logf("rows actually read -- OFFSET 4000: %d, cursor: %d", deepOffset, byCursor)
+
+	if deepOffset <= byCursor {
+		t.Errorf("expected deep OFFSET to read far more rows than the cursor; got %d vs %d",
+			deepOffset, byCursor)
 	}
 }

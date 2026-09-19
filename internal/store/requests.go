@@ -81,28 +81,72 @@ func (s *Store) InsertRequest(ctx context.Context, endpointID string, req *captu
 	return id, nil
 }
 
-// ListRequests returns the newest requests for an inbox.
-//
-// This is the query the (endpoint_id, received_at desc) index exists for:
-// equality on the first column, ordering on the second, so Postgres seeks and
-// walks rather than scanning and sorting.
-//
-// Pagination here is a bare LIMIT, which is correct only for "the first page".
-// Cursor pagination lands in unit 09.
-func (s *Store) ListRequests(ctx context.Context, endpointID string, limit int) ([]StoredRequest, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
+// Page is one page of results plus the token for the next one.
+type Page struct {
+	Requests []StoredRequest
+	// NextCursor is empty when this is the last page.
+	NextCursor string
+}
 
-	const q = `
+const (
+	defaultLimit = 50
+	maxLimit     = 200
+)
+
+// listFirstPage and listAfterCursor differ only in the WHERE clause.
+//
+// Two constants rather than one query with `($2::timestamptz is null or ...)`:
+// a null-guarded predicate is harder to read, and it gives the planner a
+// condition it must evaluate per row instead of a plain index bound.
+const (
+	selectRequestCols = `
 		select id::text, endpoint_id::text, method, path, query, headers,
 		       body, body_size, body_truncated, declared_size, source_ip, received_at
 		from requests
-		where endpoint_id = $1
-		order by received_at desc
-		limit $2`
+		where endpoint_id = $1`
 
-	rows, err := s.pool.Query(ctx, q, endpointID, limit)
+	orderAndLimit = `
+		order by received_at desc, id desc
+		limit $2`
+)
+
+// ListRequests returns one page of an inbox's requests, newest first.
+//
+// Cursor pagination, not OFFSET. This list is append-only and read live while
+// new captures arrive, so every new row shifts every offset -- a user paging
+// through would see rows repeat. See docs/learn/09-pagination.md.
+//
+// Pass a nil cursor for the first page, then feed back Page.NextCursor.
+func (s *Store) ListRequests(ctx context.Context, endpointID string, limit int, after *Cursor) (*Page, error) {
+	if limit <= 0 || limit > maxLimit {
+		limit = defaultLimit
+	}
+
+	// Ask for one more than requested. If it comes back there is another page,
+	// and we discard it. The same trick as the +1 probe on the body read in
+	// unit 06: the cheapest way to distinguish "exactly this many" from "this
+	// many and more" is to ask for one extra.
+	//
+	// The alternative -- a separate COUNT(*) -- is a second query that scans
+	// every matching row to answer a question we only need one bit of.
+	probe := limit + 1
+
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if after == nil {
+		rows, err = s.pool.Query(ctx, selectRequestCols+orderAndLimit, endpointID, probe)
+	} else {
+		// Row-value comparison. Postgres compares the tuple lexicographically:
+		// received_at first, and id ONLY where timestamps tie. Writing it as
+		// `received_at <= $3 and (received_at < $3 or id < $4)` would be
+		// equivalent and much easier to get subtly wrong.
+		const cursorClause = ` and (received_at, id) < ($3, $4)`
+		rows, err = s.pool.Query(ctx,
+			selectRequestCols+cursorClause+orderAndLimit,
+			endpointID, probe, after.ReceivedAt, after.ID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list requests: %w", err)
 	}
@@ -111,7 +155,7 @@ func (s *Store) ListRequests(ctx context.Context, endpointID string, limit int) 
 	// the loop would not -- so the defer is not optional.
 	defer rows.Close()
 
-	var out []StoredRequest
+	out := make([]StoredRequest, 0, limit)
 	for rows.Next() {
 		r, err := scanRequest(rows)
 		if err != nil {
@@ -125,7 +169,16 @@ func (s *Store) ListRequests(ctx context.Context, endpointID string, limit int) 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list requests: %w", err)
 	}
-	return out, nil
+
+	page := &Page{Requests: out}
+	if len(out) > limit {
+		// The probe row came back: trim it, and hand out a cursor pointing at
+		// the last row the caller actually receives.
+		page.Requests = out[:limit]
+		last := page.Requests[limit-1]
+		page.NextCursor = Cursor{ReceivedAt: last.ReceivedAt, ID: last.ID}.String()
+	}
+	return page, nil
 }
 
 // GetRequest fetches one captured request by id.

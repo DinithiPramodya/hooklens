@@ -180,18 +180,35 @@ func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	reqs, err := s.store.ListRequests(r.Context(), ep.ID, limit)
+
+	// An absent cursor means the first page. A PRESENT but malformed one is a
+	// client error, not something to silently treat as "start over" -- that
+	// would make a truncated cursor look like an infinite list.
+	var after *store.Cursor
+	if raw := r.URL.Query().Get("after"); raw != "" {
+		c, err := store.ParseCursor(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "malformed cursor"})
+			return
+		}
+		after = &c
+	}
+	page, err := s.store.ListRequests(r.Context(), ep.ID, limit, after)
 	if err != nil {
 		s.log.Error("list requests", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "list failed"})
 		return
 	}
 
-	out := make([]map[string]any, 0, len(reqs))
-	for _, req := range reqs {
+	out := make([]map[string]any, 0, len(page.Requests))
+	for _, req := range page.Requests {
 		out = append(out, summarise(req))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"inbox": ep.Slug, "requests": out})
+	body := map[string]any{"inbox": ep.Slug, "requests": out}
+	if page.NextCursor != "" {
+		body["next_cursor"] = page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
