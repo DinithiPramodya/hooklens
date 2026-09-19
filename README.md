@@ -88,5 +88,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [02 — Containers, images, and Compose](docs/learn/02-containers.md)
 - [03 — Schema migrations](docs/learn/03-migrations.md)
 - [04 — Continuous integration](docs/learn/04-ci.md)
+- [05 — DNS, and the certificates that ride on it](docs/learn/05-dns-and-tls.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).
