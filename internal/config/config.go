@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // Config is the entire runtime configuration of the process.
@@ -22,6 +23,10 @@ type Config struct {
 	// DatabaseURL is the Postgres connection string used by migrations and, from
 	// Phase 1, by the application itself.
 	DatabaseURL string
+
+	// SweepInterval is how often expired captures are deleted. Configurable
+	// mainly so tests can drive it fast.
+	SweepInterval time.Duration
 
 	// BaseDomain is the domain the app itself is served from, e.g.
 	// "hooklens.dev". A single label in front of it -- "a7f3.hooklens.dev" --
@@ -41,7 +46,8 @@ func Load() (Config, error) {
 		BaseDomain: strings.ToLower(env("HOOKLENS_BASE_DOMAIN", "localhost")),
 		// Default matches compose.yaml so a fresh clone works after one
 		// `docker compose up -d` with nothing exported.
-		DatabaseURL: env("DATABASE_URL", "postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable"),
+		DatabaseURL:   env("DATABASE_URL", "postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable"),
+		SweepInterval: envDuration("HOOKLENS_SWEEP_INTERVAL", sweepIntervalDefault),
 	}
 
 	// Validate at startup, not at first use. A process that boots, reports
@@ -70,4 +76,23 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+const sweepIntervalDefault = 5 * time.Minute
+
+// envDuration reads a Go duration string ("30s", "5m") or falls back.
+//
+// An unparseable value falls back rather than failing startup: this setting is
+// an operational knob, and refusing to boot over a typo in it would trade a
+// slightly-wrong sweep interval for an outage.
+func envDuration(key string, def time.Duration) time.Duration {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return def
+	}
+	return d
 }

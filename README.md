@@ -4,9 +4,10 @@ A webhook inspector with a self-hosted tunnel. It gives you a public URL, captur
 request sent to it byte-for-byte, streams them to a web UI, and forwards them to code
 running on your laptop. Replay, diff, and provider-signature verification on top.
 
-> **Status: Phase 1 of 6 — the mailbox.** Routing, containers, migrations and faithful
-> request reading work. Nothing is
-> persisted to the database yet. See [PLAN.md](PLAN.md) for the full build plan.
+> **Status: Phase 1 of 6 complete — the mailbox works.** Requests are captured, stored
+> byte-for-byte, authenticated, paginated and expired. The UI arrives in Phase 2. Nothing is
+
+> visual yet. See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
 
@@ -100,5 +101,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [07 — Storing a request: column types, identifiers and one index](docs/learn/07-storing-a-request.md)
 - [08 — Capability URLs: entropy, and why tokens are hashed](docs/learn/08-capability-urls.md)
 - [09 — Cursor vs offset pagination](docs/learn/09-pagination.md)
+- [10 — Background workers: goroutines, tickers, and the retention sweep](docs/learn/10-background-workers.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

@@ -760,3 +760,114 @@ func TestCursorPlanIsNotOffsetPlan(t *testing.T) {
 			deepOffset, byCursor)
 	}
 }
+
+// TestDeleteExpiredRequests covers the three things the sweep must get right:
+// old rows go, fresh rows stay, and the window is per-inbox.
+func TestDeleteExpiredRequests(t *testing.T) {
+	st := testStore(t)
+	ctx := t.Context()
+
+	shortLived, err := st.CreateEndpoint(ctx, "1h retention")
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	longLived, err := st.CreateEndpoint(ctx, "default 168h retention")
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	if err := st.SetRetention(ctx, shortLived.ID, 1); err != nil {
+		t.Fatalf("SetRetention: %v", err)
+	}
+
+	now := time.Now().UTC()
+	add := func(ep string, age time.Duration, path string) string {
+		t.Helper()
+		id, err := st.InsertRequest(ctx, ep, &capture.Request{
+			Method: "POST", Path: path, DeclaredSize: -1,
+			ReceivedAt: now.Add(-age),
+		})
+		if err != nil {
+			t.Fatalf("InsertRequest: %v", err)
+		}
+		return id
+	}
+
+	staleShort := add(shortLived.ID, 2*time.Hour, "/stale")    // past 1h  -> goes
+	freshShort := add(shortLived.ID, 30*time.Minute, "/fresh") // under 1h -> stays
+	oldLong := add(longLived.ID, 48*time.Hour, "/2-days")      // under 168h -> stays
+	staleLong := add(longLived.ID, 200*time.Hour, "/8-days")   // past 168h  -> goes
+
+	deleted, err := st.DeleteExpiredRequests(ctx, 1000)
+	if err != nil {
+		t.Fatalf("DeleteExpiredRequests: %v", err)
+	}
+	if deleted < 2 {
+		t.Errorf("deleted %d rows, want at least the 2 expired ones", deleted)
+	}
+
+	gone := func(id, label string) {
+		t.Helper()
+		if _, err := st.GetRequest(ctx, id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s should have been swept, got %v", label, err)
+		}
+	}
+	kept := func(id, label string) {
+		t.Helper()
+		if _, err := st.GetRequest(ctx, id); err != nil {
+			t.Errorf("%s should have been kept, got %v", label, err)
+		}
+	}
+
+	gone(staleShort, "2h-old row in a 1h inbox")
+	kept(freshShort, "30m-old row in a 1h inbox")
+	// The same 48h age is expired in the short inbox and fine in the long one:
+	// this is what makes retention per-endpoint rather than global.
+	kept(oldLong, "48h-old row in a 168h inbox")
+	gone(staleLong, "200h-old row in a 168h inbox")
+}
+
+// TestDeleteExpiredRequestsBatching checks the LIMIT actually bounds the
+// statement -- an unbounded DELETE over a large backlog holds locks for its
+// whole duration.
+func TestDeleteExpiredRequestsBatching(t *testing.T) {
+	st := testStore(t)
+	ctx := t.Context()
+
+	ep, err := st.CreateEndpoint(ctx, "")
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	if err := st.SetRetention(ctx, ep.ID, 1); err != nil {
+		t.Fatalf("SetRetention: %v", err)
+	}
+
+	_, err = st.pool.Exec(ctx, `
+		insert into requests (endpoint_id, method, path, declared_size, received_at)
+		select $1, 'POST', '/old' || g, null, now() - interval '5 hours'
+		from generate_series(1, 25) g`, ep.ID)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// A batch of 10 must delete exactly 10, not all 25.
+	n, err := st.DeleteExpiredRequests(ctx, 10)
+	if err != nil || n != 10 {
+		t.Fatalf("first batch deleted %d (err %v), want 10", n, err)
+	}
+
+	// Drain, and confirm the short final batch signals "done".
+	total := n
+	for range 10 {
+		n, err = st.DeleteExpiredRequests(ctx, 10)
+		if err != nil {
+			t.Fatalf("DeleteExpiredRequests: %v", err)
+		}
+		total += n
+		if n < 10 {
+			break
+		}
+	}
+	if total != 25 {
+		t.Errorf("deleted %d in total, want 25", total)
+	}
+}

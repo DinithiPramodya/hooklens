@@ -267,3 +267,49 @@ func scanRequestInto(sc scanner, r *StoredRequest, hash *[]byte) error {
 	r.Headers, err = decodeHeaders(headers)
 	return err
 }
+
+// DeleteExpiredRequests removes up to batch requests that are past their
+// inbox's retention window. It returns how many it deleted.
+//
+// A returned count below batch means the backlog is drained; equal to batch
+// means call again.
+func (s *Store) DeleteExpiredRequests(ctx context.Context, batch int) (int64, error) {
+	if batch <= 0 {
+		batch = 1000
+	}
+
+	// The subquery picks the ids first, then the outer statement deletes
+	// exactly those. DELETE ... LIMIT is not valid SQL in Postgres, and even
+	// where it exists a bare `delete ... where received_at < ...` would have
+	// no bound at all -- one statement holding locks across an entire backlog.
+	//
+	// make_interval(hours => ...) rather than string concatenation into an
+	// interval literal: it takes the value as a parameter instead of building
+	// SQL text from a column.
+	const q = `
+		delete from requests
+		where id in (
+			select r.id
+			from requests r
+			join endpoints e on e.id = r.endpoint_id
+			where r.received_at < now() - make_interval(hours => e.retention_hours)
+			limit $1
+		)`
+
+	tag, err := s.pool.Exec(ctx, q, batch)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired requests: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// SetRetention changes how long an inbox keeps captures. Used by tests and,
+// later, by the settings UI.
+func (s *Store) SetRetention(ctx context.Context, endpointID string, hours int) error {
+	const q = `update endpoints set retention_hours = $2 where id = $1`
+	_, err := s.pool.Exec(ctx, q, endpointID, hours)
+	if err != nil {
+		return fmt.Errorf("set retention: %w", err)
+	}
+	return nil
+}

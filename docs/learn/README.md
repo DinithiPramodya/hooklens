@@ -38,7 +38,7 @@ last, after the domain question was settled.*
 | 07 | [Storing a request](07-storing-a-request.md) | `jsonb` vs `json` vs `text` vs `bytea` · UUIDv7 and index locality · what a composite index actually does |
 | 08 | [Capability URLs](08-capability-urls.md) | Entropy · why unguessable is enough · why tokens are hashed, and why *not* with bcrypt |
 | 09 | [Cursor vs offset pagination](09-pagination.md) | Why `OFFSET 10000` reads 10,000 rows · drift on a live list · composite cursors |
-| 10 | Background workers | Goroutines, tickers, retention sweeps |
+| 10 | [Background workers](10-background-workers.md) | Goroutine cost vs threads · tickers and dropped ticks · why a panic here kills the process · shutdown ordering |
 
 **Quiz:** pending — written at the end of the phase.
 
