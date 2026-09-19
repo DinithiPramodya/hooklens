@@ -1,0 +1,21 @@
+# golangci-lint v2 configuration.
+#
+# The version key is mandatory in v2 and is what distinguishes this from a v1
+# config. Running a v1-era config (or a v1-era ACTION, which is what happened on
+# our first CI run) against a v2 binary fails with exit code 3 -- a tooling
+# error, not a lint finding.
+version: "2"
+
+linters:
+  # The standard set: errcheck, govet, ineffassign, staticcheck, unused.
+  # Deliberately not "all" -- that enables opinionated style linters that would
+  # bury real findings in noise, and a gate nobody reads is a gate nobody heeds.
+  default: standard
+
+  exclusions:
+    rules:
+      # Tests deliberately ignore errors from setup and teardown helpers where
+      # the assertion is the point, not the plumbing.
+      - path: _test\.go
+        linters:
+          - errcheck

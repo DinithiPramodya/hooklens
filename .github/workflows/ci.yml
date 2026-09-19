@@ -46,9 +46,9 @@ jobs:
           --health-retries 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           # Read the version from go.mod rather than pinning it here, so there is
           # one place to bump Go and no way for the two to drift apart.
@@ -73,17 +73,17 @@ jobs:
       - name: build
         run: go build ./...
 
+      - name: migrate (schema for the store tests)
+        env:
+          DATABASE_URL: postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable
+        run: go run ./cmd/hooklens migrate up
+
       # -race is the reason this job exists on Linux. The race detector requires
       # cgo, cgo requires a C compiler, and the Windows dev machine has none --
       # so this is the only place the detector runs. Phase 3 adds a
       # mutex-guarded map shared across goroutines, where it earns its keep.
       # -count=1 defeats Go's test result cache, which would otherwise report a
       # pass without running anything.
-      - name: migrate (schema for the store tests)
-        env:
-          DATABASE_URL: postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable
-        run: go run ./cmd/hooklens migrate up
-
       - name: test (race detector)
         env:
           # Without this the store tests SKIP rather than fail, and CI goes
@@ -107,28 +107,31 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
       # Separate job so a lint failure is visibly distinct from a broken build,
       # and so it runs in parallel rather than adding to the test job's time.
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # Pinned, not "latest". A new MAJOR of golangci-lint appearing overnight
+          # is precisely what broke the first CI run -- the v6 action drove a v2
+          # binary and exited 3. Bumping this is a commit, which is the point.
+          version: v2.13.2
 
   docker:
     name: docker build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Buildx enables the GitHub Actions cache backend below. The default
       # builder cannot use type=gha.
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           push: false
