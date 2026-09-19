@@ -5,9 +5,9 @@ request sent to it byte-for-byte, streams them to a web UI, and forwards them to
 running on your laptop. Replay, diff, and provider-signature verification on top.
 
 > **Status: Phase 1 of 6 complete — the mailbox works.** Requests are captured, stored
-> byte-for-byte, authenticated, paginated and expired. The UI arrives in Phase 2. Nothing is
-
-> visual yet. See [PLAN.md](PLAN.md) for the full build plan.
+> byte-for-byte, authenticated with per-inbox tokens, paginated by cursor, and expired on a
+> retention schedule. There is no UI yet; that is Phase 2, and the tunnel is Phase 3.
+> See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
 
