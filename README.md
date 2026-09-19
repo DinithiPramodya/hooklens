@@ -24,11 +24,17 @@ go run ./cmd/hooklens            # serves on :8080
 Then, in another terminal:
 
 ```sh
+# create an inbox -- the token is shown ONCE and stored only as a hash
+curl -sX POST localhost:8080/api/endpoints -d "{\"name\":\"demo\"}"
+
 curl localhost:8080/healthz
 
 # capture into inbox "a7f3", two equivalent ways
-curl -X POST localhost:8080/e/a7f3/webhook -d '{"hello":"world"}'
-curl -X POST localhost:8080/webhook -H 'Host: a7f3.localhost' -d '{"hello":"world"}'
+curl -X POST localhost:8080/e/$SLUG/webhook -d "{\"hello\":\"world\"}"
+curl -X POST localhost:8080/webhook -H "Host: $SLUG.localhost" -d "{\"hello\":\"world\"}"
+
+# reading needs the token; capturing never does
+curl -H "Authorization: Bearer $TOKEN" localhost:8080/api/endpoints/$SLUG/requests
 ```
 
 Both forms reach the same inbox. The subdomain form is what a provider will use in
@@ -92,5 +98,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [05 — DNS, and the certificates that ride on it](docs/learn/05-dns-and-tls.md)
 - [06 — Reading a request body, and why the raw bytes matter](docs/learn/06-reading-a-request.md)
 - [07 — Storing a request: column types, identifiers and one index](docs/learn/07-storing-a-request.md)
+- [08 — Capability URLs: entropy, and why tokens are hashed](docs/learn/08-capability-urls.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

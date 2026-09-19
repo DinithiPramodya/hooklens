@@ -4,7 +4,14 @@ End-of-phase quizzes, as required by `CLAUDE.md`. Questions are interview-grade 
 from that phase's material. Answers are recorded **verbatim** — they are recall, not
 transcription, and their value is in being re-readable months later.
 
-One section per phase, appended in order.
+One section per phase, appended in order. Each phase lists the learn notes it draws
+from, so this doubles as a study index: read the notes, then answer the questions
+without looking, then check.
+
+| Phase | Material | Quiz |
+|---|---|---|
+| 0 — Skeleton and a live URL | [01](learn/01-webhooks-and-http.md) · [02](learn/02-containers.md) · [03](learn/03-migrations.md) · [04](learn/04-ci.md) · [05](learn/05-dns-and-tls.md) | [below](#phase-0--skeleton-and-a-live-url) |
+| 1 — The mailbox | [06](learn/06-reading-a-request.md) · [07](learn/07-storing-a-request.md) · [08](learn/08-capability-urls.md) · 09 · 10 | pending (end of Phase 1) |
 
 ---
 

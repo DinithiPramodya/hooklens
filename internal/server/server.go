@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/DinithiPramodya/hooklens/internal/capture"
 	"github.com/DinithiPramodya/hooklens/internal/config"
@@ -90,10 +91,9 @@ func (s *Server) appRoutes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 
-	// NOTE: none of these are authenticated yet. Anyone who reaches the API can
-	// create an inbox and read any inbox whose slug they can guess. Unit 08
-	// replaces caller-chosen slugs with generated unguessable ones and adds a
-	// capability token. Until then this is a development-only surface.
+	// Reads require the inbox owner token in an Authorization header (unit 08).
+	// Creation is deliberately open: there is nobody to authenticate yet, and an
+	// inbox is worthless until its token is held. Rate limiting is Phase 5.
 	mux.HandleFunc("POST /api/endpoints", s.handleCreateEndpoint)
 	mux.HandleFunc("GET /api/endpoints/{slug}/requests", s.handleListRequests)
 	mux.HandleFunc("GET /api/requests/{id}", s.handleGetRequest)
@@ -101,34 +101,50 @@ func (s *Server) appRoutes() http.Handler {
 	return mux
 }
 
+// bearerToken extracts the owner token from the Authorization header.
+//
+// Header only, never a query parameter. A token in a query string lands in the
+// server access log, the proxy log, the browser's history and the Referer
+// header of any outbound link -- which is precisely the leak that makes people
+// distrust capability URLs in the first place.
+func bearerToken(r *http.Request) string {
+	const prefix = "Bearer "
+	h := r.Header.Get("Authorization")
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return ""
+	}
+	return strings.TrimSpace(h[len(prefix):])
+}
+
+// unauthorized writes the single response used for every authentication
+// failure, whatever the real cause.
+//
+// A missing inbox, a wrong token and a malformed header all produce this exact
+// body. Distinguishing them would tell an attacker which of 2^128 slugs exist,
+// turning a guessing problem into a lookup.
+func unauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="hooklens"`)
+	writeJSON(w, http.StatusUnauthorized, map[string]string{
+		"error": "missing or invalid token",
+	})
+}
+
 func (s *Server) handleCreateEndpoint(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Slug string `json:"slug"`
 		Name string `json:"name"`
 	}
 	// A body limit even here: this endpoint is as reachable as any other, and
 	// json.Decode on an unbounded reader has the same problem as io.ReadAll.
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err != nil {
+	// EOF is fine -- an empty body means an unnamed inbox.
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
 
-	// Validate with the same function the router uses, so a slug that can be
-	// created is always a slug that can be routed to. Two separate notions of
-	// "valid slug" would drift, and the failure mode is an inbox that exists
-	// and cannot receive anything.
-	if !validSlug(body.Slug) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "slug must be 3-32 chars of a-z, 0-9 and hyphens, not starting or ending with a hyphen, and not reserved",
-		})
-		return
-	}
-
-	ep, err := s.store.CreateEndpoint(r.Context(), body.Slug, body.Name)
-	if errors.Is(err, store.ErrSlugTaken) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "slug already in use"})
-		return
-	}
+	// The caller no longer chooses the slug. A caller-chosen slug is by
+	// definition guessable -- someone would have taken "stripe" and everyone
+	// could have found it. See docs/learn/08-capability-urls.md.
+	ep, err := s.store.CreateEndpoint(r.Context(), body.Name)
 	if err != nil {
 		s.log.Error("create endpoint", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not create inbox"})
@@ -140,6 +156,10 @@ func (s *Server) handleCreateEndpoint(w http.ResponseWriter, r *http.Request) {
 		"slug":       ep.Slug,
 		"name":       ep.Name,
 		"created_at": ep.CreatedAt,
+		// The only time this value ever leaves the server. It is not stored --
+		// only its SHA-256 is -- so it cannot be shown again or recovered.
+		"token":         ep.Token,
+		"token_warning": "shown once; it is stored only as a hash and cannot be recovered",
 		"urls": map[string]string{
 			"subdomain": "http://" + ep.Slug + "." + s.cfg.BaseDomain + "/",
 			"path":      "/e/" + ep.Slug + "/",
@@ -148,15 +168,13 @@ func (s *Server) handleCreateEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
-	slug := r.PathValue("slug")
-
-	ep, err := s.store.EndpointBySlug(r.Context(), slug)
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such inbox"})
+	ep, err := s.store.AuthenticateEndpoint(r.Context(), r.PathValue("slug"), bearerToken(r))
+	if errors.Is(err, store.ErrUnauthorized) {
+		unauthorized(w)
 		return
 	}
 	if err != nil {
-		s.log.Error("lookup endpoint", "err", err)
+		s.log.Error("authenticate endpoint", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
 		return
 	}
@@ -177,15 +195,15 @@ func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
-	req, err := s.store.GetRequest(r.Context(), r.PathValue("id"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such request"})
+	req, err := s.store.AuthenticateRequest(r.Context(), r.PathValue("id"), bearerToken(r))
+	if errors.Is(err, store.ErrUnauthorized) {
+		unauthorized(w)
 		return
 	}
 	if err != nil {
-		// An unparseable id reaches Postgres as a bad uuid cast, which is a
-		// client error, not ours. Not worth distinguishing further until the
-		// UI exists.
+		// A malformed id reaches Postgres as a bad uuid cast. Report it as a
+		// client error, not a 500 -- and deliberately do not distinguish it
+		// from "exists but not yours".
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request id"})
 		return
 	}

@@ -193,3 +193,24 @@ func decodeHeaders(b []byte) ([]capture.Header, error) {
 	}
 	return out, nil
 }
+
+// scanRequestInto scans a request row that also carries the owning endpoint's
+// token hash, for the authenticated single-request query.
+//
+// Separate from scanRequest rather than adding an optional parameter: the two
+// queries select different column lists, and a shared function taking a "do we
+// have a hash column?" flag is the kind of thing that silently mis-scans the
+// day someone adds a column to one query and not the other.
+func scanRequestInto(sc scanner, r *StoredRequest, hash *[]byte) error {
+	var headers []byte
+	err := sc.Scan(
+		&r.ID, &r.EndpointID, &r.Method, &r.Path, &r.Query, &headers,
+		&r.Body, &r.BodySize, &r.BodyTruncated, &r.DeclaredSize, &r.SourceIP,
+		&r.ReceivedAt, hash,
+	)
+	if err != nil {
+		return err
+	}
+	r.Headers, err = decodeHeaders(headers)
+	return err
+}
