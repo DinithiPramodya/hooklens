@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/DinithiPramodya/hooklens/internal/capture"
 )
 
 // ReservedPrefix is the one path namespace this handler will not capture.
@@ -38,11 +40,15 @@ func SlugFrom(ctx context.Context) string {
 
 // Handler captures incoming requests.
 type Handler struct {
-	log *slog.Logger
+	log     *slog.Logger
+	maxBody int64
 }
 
-func New(log *slog.Logger) *Handler {
-	return &Handler{log: log}
+func New(log *slog.Logger, maxBody int64) *Handler {
+	if maxBody <= 0 {
+		maxBody = capture.DefaultMaxBody
+	}
+	return &Handler{log: log, maxBody: maxBody}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -68,33 +74,51 @@ func (h *Handler) serveReserved(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// capture is a Phase 0 stub. It proves routing reaches the right place and
-// nothing more: the body is not read, nothing is stored, and the response is not
-// yet configurable. Phase 1 replaces this with the real thing -- a capped body
-// read, ordered headers, raw bytes, and a row in Postgres.
-//
-// It deliberately does NOT read the body yet. Reading an unbounded body from an
-// untrusted client is the vulnerability the brief for Phase 1 opens with, and
-// writing the naive version here first would mean shipping it, however briefly.
+// capture reads the request and (from unit 07) stores it.
 func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 	slug := SlugFrom(r.Context())
 
-	h.log.Info("capture (stub)",
+	req, err := capture.FromHTTP(r, h.maxBody)
+	if err != nil {
+		// A body read failure is the client's doing -- they hung up, or timed
+		// out -- not ours. Log it and carry on with whatever did arrive: for an
+		// inspector, "the sender disconnected after 5 bytes" is the answer the
+		// user came for, not an error to swallow.
+		h.log.Warn("partial body", "inbox", slug, "err", err)
+	}
+	if req == nil {
+		// Only reachable if FromHTTP failed before constructing anything.
+		writeJSON(w, http.StatusOK, map[string]any{"captured": false, "inbox": slug})
+		return
+	}
+
+	h.log.Info("captured",
 		"inbox", slug,
-		"method", r.Method,
-		"path", r.URL.Path,
-		"content_type", r.Header.Get("Content-Type"),
-		"content_length", r.ContentLength,
+		"method", req.Method,
+		"path", req.Path,
+		"headers", len(req.Headers),
+		"body_bytes", len(req.Body),
+		"truncated", req.Truncated,
+		"declared_size", req.DeclaredSize,
+		"source_ip", req.SourceIP.String(),
 	)
 
-	// 200 with a small body. A provider treats any 2xx as delivered; anything
-	// else and it retries, in Stripe's case for up to three days.
+	// The response is written LAST, after everything fallible is done. Once we
+	// say 200 the provider considers the event delivered and will not send it
+	// again, so nothing that can fail may run between the durable record and
+	// this line. Today there is no durable record yet -- unit 07 adds it, and
+	// the insert goes immediately above this.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"captured": false,
-		"inbox":    slug,
-		"method":   r.Method,
-		"path":     r.URL.Path,
-		"note":     "phase 0 stub: routing works, storage lands in phase 1",
+		"captured":      false,
+		"inbox":         slug,
+		"method":        req.Method,
+		"path":          req.Path,
+		"query":         req.Query,
+		"headers":       len(req.Headers),
+		"body_bytes":    len(req.Body),
+		"truncated":     req.Truncated,
+		"declared_size": req.DeclaredSize,
+		"note":          "read faithfully; storage lands in unit 07",
 	})
 }
 

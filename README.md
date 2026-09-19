@@ -4,8 +4,9 @@ A webhook inspector with a self-hosted tunnel. It gives you a public URL, captur
 request sent to it byte-for-byte, streams them to a web UI, and forwards them to code
 running on your laptop. Replay, diff, and provider-signature verification on top.
 
-> **Status: Phase 0 of 6 — skeleton.** Routing, containers, and migrations work. Nothing is
-> captured to the database yet. See [PLAN.md](PLAN.md) for the full build plan.
+> **Status: Phase 1 of 6 — the mailbox.** Routing, containers, migrations and faithful
+> request reading work. Nothing is
+> persisted to the database yet. See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
 
@@ -89,5 +90,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [03 — Schema migrations](docs/learn/03-migrations.md)
 - [04 — Continuous integration](docs/learn/04-ci.md)
 - [05 — DNS, and the certificates that ride on it](docs/learn/05-dns-and-tls.md)
+- [06 — Reading a request body, and why the raw bytes matter](docs/learn/06-reading-a-request.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

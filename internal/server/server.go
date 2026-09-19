@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/DinithiPramodya/hooklens/internal/capture"
 	"github.com/DinithiPramodya/hooklens/internal/config"
 	"github.com/DinithiPramodya/hooklens/internal/ingest"
 )
@@ -29,7 +30,7 @@ func New(cfg config.Config, log *slog.Logger) *Server {
 	s := &Server{
 		cfg:    cfg,
 		log:    log,
-		ingest: ingest.New(log),
+		ingest: ingest.New(log, capture.DefaultMaxBody),
 	}
 	s.app = s.appRoutes()
 
