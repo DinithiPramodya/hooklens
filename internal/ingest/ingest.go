@@ -6,11 +6,13 @@ package ingest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/DinithiPramodya/hooklens/internal/capture"
+	"github.com/DinithiPramodya/hooklens/internal/store"
 )
 
 // ReservedPrefix is the one path namespace this handler will not capture.
@@ -41,14 +43,15 @@ func SlugFrom(ctx context.Context) string {
 // Handler captures incoming requests.
 type Handler struct {
 	log     *slog.Logger
+	store   *store.Store
 	maxBody int64
 }
 
-func New(log *slog.Logger, maxBody int64) *Handler {
+func New(log *slog.Logger, st *store.Store, maxBody int64) *Handler {
 	if maxBody <= 0 {
 		maxBody = capture.DefaultMaxBody
 	}
-	return &Handler{log: log, maxBody: maxBody}
+	return &Handler{log: log, store: st, maxBody: maxBody}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -74,9 +77,31 @@ func (h *Handler) serveReserved(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// capture reads the request and (from unit 07) stores it.
+// capture reads the request and stores it.
 func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
-	slug := SlugFrom(r.Context())
+	ctx := r.Context()
+	slug := SlugFrom(ctx)
+
+	// Resolve the inbox BEFORE reading the body. An unknown slug means we are
+	// about to read up to a megabyte from someone for a destination that does
+	// not exist -- which is free storage-exhaustion for anyone scanning
+	// subdomains. Rejecting first costs one indexed lookup.
+	ep, err := h.store.EndpointBySlug(ctx, slug)
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "no such inbox",
+			"inbox": slug,
+		})
+		return
+	}
+	if err != nil {
+		h.log.Error("endpoint lookup failed", "inbox", slug, "err", err)
+		// 503, not 500: this is "come back later", and a provider's retry is
+		// exactly the right behaviour here -- unlike the Phase 0 quiz Q1 case,
+		// we genuinely have not stored anything.
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "temporarily unavailable"})
+		return
+	}
 
 	req, err := capture.FromHTTP(r, h.maxBody)
 	if err != nil {
@@ -87,38 +112,46 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 		h.log.Warn("partial body", "inbox", slug, "err", err)
 	}
 	if req == nil {
-		// Only reachable if FromHTTP failed before constructing anything.
-		writeJSON(w, http.StatusOK, map[string]any{"captured": false, "inbox": slug})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "could not read request"})
 		return
 	}
 
+	id, err := h.store.InsertRequest(ctx, ep.ID, req)
+	if err != nil {
+		h.log.Error("insert failed", "inbox", slug, "err", err)
+		// Nothing was stored, so asking the provider to retry is honest.
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "temporarily unavailable"})
+		return
+	}
+
+	// ---- the request is durable from here on ----
+	//
+	// Everything below this line must be incapable of turning a stored request
+	// into a non-2xx response. A provider treats any non-2xx as "not delivered"
+	// and retries, so a failure here would produce a duplicate for an event we
+	// already hold -- the exact bug from Phase 0 quiz Q1.
+
+	// Best-effort, deliberately ignoring the error: last_seen_at is a nicety.
+	if err := h.store.TouchEndpoint(ctx, ep.ID, req.ReceivedAt); err != nil {
+		h.log.Warn("touch endpoint failed", "inbox", slug, "err", err)
+	}
+
 	h.log.Info("captured",
+		"id", id,
 		"inbox", slug,
 		"method", req.Method,
 		"path", req.Path,
 		"headers", len(req.Headers),
 		"body_bytes", len(req.Body),
 		"truncated", req.Truncated,
-		"declared_size", req.DeclaredSize,
-		"source_ip", req.SourceIP.String(),
 	)
 
-	// The response is written LAST, after everything fallible is done. Once we
-	// say 200 the provider considers the event delivered and will not send it
-	// again, so nothing that can fail may run between the durable record and
-	// this line. Today there is no durable record yet -- unit 07 adds it, and
-	// the insert goes immediately above this.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"captured":      false,
-		"inbox":         slug,
-		"method":        req.Method,
-		"path":          req.Path,
-		"query":         req.Query,
-		"headers":       len(req.Headers),
-		"body_bytes":    len(req.Body),
-		"truncated":     req.Truncated,
-		"declared_size": req.DeclaredSize,
-		"note":          "read faithfully; storage lands in unit 07",
+		"captured":   true,
+		"id":         id,
+		"inbox":      slug,
+		"body_bytes": len(req.Body),
+		"truncated":  req.Truncated,
 	})
 }
 

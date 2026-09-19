@@ -79,7 +79,16 @@ jobs:
       # mutex-guarded map shared across goroutines, where it earns its keep.
       # -count=1 defeats Go's test result cache, which would otherwise report a
       # pass without running anything.
+      - name: migrate (schema for the store tests)
+        env:
+          DATABASE_URL: postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable
+        run: go run ./cmd/hooklens migrate up
+
       - name: test (race detector)
+        env:
+          # Without this the store tests SKIP rather than fail, and CI goes
+          # green having exercised none of the database layer.
+          DATABASE_URL: postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable
         run: go test ./... -race -count=1
 
       # Exercise migrations against the real database: forward, reversed, and

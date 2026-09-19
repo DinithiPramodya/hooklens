@@ -1,0 +1,195 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/netip"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/DinithiPramodya/hooklens/internal/capture"
+)
+
+// StoredRequest is a captured request as it came back out of the database.
+type StoredRequest struct {
+	ID            string
+	EndpointID    string
+	Method        string
+	Path          string
+	Query         string
+	Headers       []capture.Header
+	Body          []byte
+	BodySize      int
+	BodyTruncated bool
+	DeclaredSize  *int64
+	SourceIP      *netip.Addr
+	ReceivedAt    time.Time
+}
+
+// headerJSON is the on-disk shape of one header inside the jsonb array.
+//
+// Lowercase field names because this is a wire format that a UI and psql both
+// read; Go's exported-field capitalisation should not leak into the database.
+type headerJSON struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// InsertRequest stores one captured request and returns its id.
+func (s *Store) InsertRequest(ctx context.Context, endpointID string, req *capture.Request) (string, error) {
+	headers, err := encodeHeaders(req.Headers)
+	if err != nil {
+		return "", err
+	}
+
+	// Content-Length is -1 when the sender did not send one (chunked encoding).
+	// Store that as SQL NULL rather than -1: "unknown" and "negative one" are
+	// different statements, and a NULL cannot be accidentally arithmetic'd.
+	var declared *int64
+	if req.DeclaredSize >= 0 {
+		d := req.DeclaredSize
+		declared = &d
+	}
+
+	// Likewise an unparseable RemoteAddr becomes NULL rather than an empty
+	// string -- inet has no empty value, and "we could not tell" is real
+	// information.
+	var ip *netip.Addr
+	if req.SourceIP.IsValid() {
+		a := req.SourceIP
+		ip = &a
+	}
+
+	const q = `
+		insert into requests (
+			endpoint_id, method, path, query, headers,
+			body, body_size, body_truncated, declared_size, source_ip, received_at
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		returning id::text`
+
+	var id string
+	err = s.pool.QueryRow(ctx, q,
+		endpointID, req.Method, req.Path, req.Query, headers,
+		req.Body, len(req.Body), req.Truncated, declared, ip, req.ReceivedAt,
+	).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("insert request: %w", err)
+	}
+	return id, nil
+}
+
+// ListRequests returns the newest requests for an inbox.
+//
+// This is the query the (endpoint_id, received_at desc) index exists for:
+// equality on the first column, ordering on the second, so Postgres seeks and
+// walks rather than scanning and sorting.
+//
+// Pagination here is a bare LIMIT, which is correct only for "the first page".
+// Cursor pagination lands in unit 09.
+func (s *Store) ListRequests(ctx context.Context, endpointID string, limit int) ([]StoredRequest, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+
+	const q = `
+		select id::text, endpoint_id::text, method, path, query, headers,
+		       body, body_size, body_truncated, declared_size, source_ip, received_at
+		from requests
+		where endpoint_id = $1
+		order by received_at desc
+		limit $2`
+
+	rows, err := s.pool.Query(ctx, q, endpointID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list requests: %w", err)
+	}
+	// Rows must be closed or the connection never returns to the pool. Exhaust
+	// the iterator and the driver closes it for you, but an early return inside
+	// the loop would not -- so the defer is not optional.
+	defer rows.Close()
+
+	var out []StoredRequest
+	for rows.Next() {
+		r, err := scanRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	// rows.Err() reports a failure that happened mid-iteration, which Next()
+	// signals only by returning false -- indistinguishable from "no more rows"
+	// without this check.
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list requests: %w", err)
+	}
+	return out, nil
+}
+
+// GetRequest fetches one captured request by id.
+func (s *Store) GetRequest(ctx context.Context, id string) (*StoredRequest, error) {
+	const q = `
+		select id::text, endpoint_id::text, method, path, query, headers,
+		       body, body_size, body_truncated, declared_size, source_ip, received_at
+		from requests
+		where id = $1`
+
+	r, err := scanRequest(s.pool.QueryRow(ctx, q, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return r, err
+}
+
+// scanner is satisfied by both pgx.Row and pgx.Rows, so one scan function
+// serves the single-row and multi-row queries.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRequest(sc scanner) (*StoredRequest, error) {
+	var (
+		r       StoredRequest
+		headers []byte
+	)
+	err := sc.Scan(
+		&r.ID, &r.EndpointID, &r.Method, &r.Path, &r.Query, &headers,
+		&r.Body, &r.BodySize, &r.BodyTruncated, &r.DeclaredSize, &r.SourceIP, &r.ReceivedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if r.Headers, err = decodeHeaders(headers); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func encodeHeaders(hs []capture.Header) ([]byte, error) {
+	out := make([]headerJSON, len(hs))
+	for i, h := range hs {
+		out[i] = headerJSON{Name: h.Name, Value: h.Value}
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("encode headers: %w", err)
+	}
+	return b, nil
+}
+
+func decodeHeaders(b []byte) ([]capture.Header, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	var in []headerJSON
+	if err := json.Unmarshal(b, &in); err != nil {
+		return nil, fmt.Errorf("decode headers: %w", err)
+	}
+	out := make([]capture.Header, len(in))
+	for i, h := range in {
+		out[i] = capture.Header{Name: h.Name, Value: h.Value}
+	}
+	return out, nil
+}

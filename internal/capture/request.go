@@ -89,8 +89,11 @@ func FromHTTP(r *http.Request, maxBody int64) (*Request, error) {
 	}
 
 	return &Request{
-		Method:       r.Method,
-		Path:         r.URL.Path,
+		Method: r.Method,
+		// EscapedPath, not Path. Path is percent-DECODED, so /a%00b would put a
+		// NUL byte in the string -- which Postgres rejects in a text column. The
+		// escaped form is both storable and closer to the literal wire bytes.
+		Path:         r.URL.EscapedPath(),
 		Query:        r.URL.RawQuery,
 		Headers:      headersOf(r),
 		Body:         body,

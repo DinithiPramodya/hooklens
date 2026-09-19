@@ -91,5 +91,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [04 — Continuous integration](docs/learn/04-ci.md)
 - [05 — DNS, and the certificates that ride on it](docs/learn/05-dns-and-tls.md)
 - [06 — Reading a request body, and why the raw bytes matter](docs/learn/06-reading-a-request.md)
+- [07 — Storing a request: column types, identifiers and one index](docs/learn/07-storing-a-request.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).
