@@ -40,7 +40,7 @@ last, after the domain question was settled.*
 | 09 | [Cursor vs offset pagination](09-pagination.md) | Why `OFFSET 10000` reads 10,000 rows · drift on a live list · composite cursors |
 | 10 | [Background workers](10-background-workers.md) | Goroutine cost vs threads · tickers and dropped ticks · why a panic here kills the process · shutdown ordering |
 
-**Quiz:** pending — written at the end of the phase.
+**Quiz:** [Phase 1](../QUIZ.md#phase-1--the-mailbox) — 12 questions with model answers.
 
 ---
 

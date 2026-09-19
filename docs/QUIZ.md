@@ -11,7 +11,7 @@ without looking, then check.
 | Phase | Material | Quiz |
 |---|---|---|
 | 0 — Skeleton and a live URL | [01](learn/01-webhooks-and-http.md) · [02](learn/02-containers.md) · [03](learn/03-migrations.md) · [04](learn/04-ci.md) · [05](learn/05-dns-and-tls.md) | [below](#phase-0--skeleton-and-a-live-url) |
-| 1 — The mailbox | [06](learn/06-reading-a-request.md) · [07](learn/07-storing-a-request.md) · [08](learn/08-capability-urls.md) · [09](learn/09-pagination.md) · [10](learn/10-background-workers.md) | pending (end of Phase 1) |
+| 1 — The mailbox | [06](learn/06-reading-a-request.md) · [07](learn/07-storing-a-request.md) · [08](learn/08-capability-urls.md) · [09](learn/09-pagination.md) · [10](learn/10-background-workers.md) | [below](#phase-1--the-mailbox) |
 
 ---
 
@@ -467,3 +467,335 @@ automated, and each has a different correct answer for a dependency outage.
 3. **Unit 2 — DNS and TLS — is still unexamined**, because it was never taught. The Q7 answer
    reached part of it independently (wildcard certificates cover one label). Worth the brief
    before Phase 1.
+
+---
+
+# Phase 1 — the mailbox
+
+*Set 2026-09-19. Material: notes [06](learn/06-reading-a-request.md),
+[07](learn/07-storing-a-request.md), [08](learn/08-capability-urls.md),
+[09](learn/09-pagination.md), [10](learn/10-background-workers.md).*
+
+> **These are model answers, not recall.** Phase 0's answers above were written from memory
+> and then assessed; these were written by Claude on request, to serve as study material.
+> The two are not equivalent evidence — reading a good answer feels like knowing it. Cover
+> the answers, work through the questions cold, and compare.
+
+---
+
+## Q1. Your capture handler does `body, _ := io.ReadAll(r.Body)`. Describe the attack, what it costs the attacker, and why `Content-Length` doesn't save you.
+
+`io.ReadAll` loops calling `Read` and growing a slice until it sees `io.EOF`. EOF arrives
+when the *sender* decides to stop. So the sender controls how much memory you allocate, and
+there is no upper bound on it.
+
+The attack is to never stop. Open a connection, start a body, and dribble a few kilobytes
+per second forever. Your process grows until the OOM killer takes it — and takes every
+in-flight request with it. A few hundred concurrent connections doing this is enough.
+
+What it costs the attacker: one machine, a few kilobytes per second per connection, and
+`curl`. No botnet, no amplification, no cleverness. That asymmetry — negligible cost to
+attack, fatal cost to defend — is what makes it a denial-of-service *primitive* rather than
+merely a bug.
+
+`Content-Length` does not save you, three times over:
+
+1. **It is a claim, not a measurement.** The sender writes it. Nothing verifies it matches
+   the bytes that follow.
+2. **Chunked transfer encoding omits it entirely.** The body arrives in self-describing
+   pieces with no length declared up front, so there is nothing to check.
+3. **Trusting it makes things worse.** The instinct after learning about it is to
+   pre-allocate — and then an attacker declares four gigabytes and you allocate four
+   gigabytes before a single byte of body arrives.
+
+The fix is not to validate the sender's claim but to stop trusting the stream: wrap it, so
+the ceiling is a number *you* chose. `io.LimitReader(r.Body, maxBody+1)`.
+
+A related variant is worth knowing because we defend it elsewhere: dribbling *headers*
+rather than a body is the Slowloris attack, and `ReadHeaderTimeout` in
+`cmd/hooklens/main.go` is what closes it.
+
+---
+
+## Q2. We read the body with `io.LimitReader(r.Body, maxBody+1)`. What is the `+1` for, and what specifically breaks if you remove it?
+
+`LimitReader` reports `io.EOF` once it has handed over its limit. That EOF is
+indistinguishable from the sender finishing — same value, no flag, nothing to inspect. So
+if you ask for exactly `maxBody` and receive exactly `maxBody` bytes, you cannot tell
+whether the body was exactly that size or whether it was larger and you silently cut it.
+
+Asking for one byte more makes the two cases distinguishable. Receiving `maxBody+1` bytes
+is proof there was more to come; receiving fewer is proof the sender finished.
+
+Remove it and `Truncated` can never be `true`. Nothing errors, nothing logs, and no test
+fails unless one asserts exactly at the boundary — which is why `TestFromHTTPBody` has
+cases at `limit-1`, exactly `limit`, and `limit+1`.
+
+The consequence is the one an inspector can least afford: the UI would render a cut-off
+body as though it were the whole thing. A user debugging a webhook would be looking at
+truncated JSON with no indication it was truncated, and would conclude the provider sent
+malformed data. The tool would be lying, confidently, about the one thing it exists to
+report accurately.
+
+---
+
+## Q3. A colleague stores captured webhook bodies in a `jsonb` column — it's queryable, and the payloads are JSON anyway. Name two distinct things that breaks, one of which is silent.
+
+**The silent one: `jsonb` does not store what you gave it.** It parses on write into a
+binary tree with keys held in sorted order. So object keys come back alphabetised,
+whitespace is gone, and duplicate keys silently lose all but the last.
+`{"b":1,   "a":2}` becomes `{"a": 2, "b": 1}`.
+
+Semantically equivalent JSON, and catastrophic here. Phase 4 verifies provider signatures
+by computing an HMAC over the exact bytes received. Reorder one key and every signature
+check fails — while the payload on screen looks perfectly correct, which is what makes the
+bug so expensive to find. You would be debugging your HMAC implementation for a day.
+
+**The loud one: it cannot hold the data at all.** A body containing a NUL byte is rejected
+outright by Postgres in `jsonb`, `json` *and* `text` — the insert errors and the capture is
+lost. Protobuf, gzip, images, and anything binary all hit this. And a body that is not
+valid JSON is not storable in a JSON column by definition, which rules out form-encoded
+bodies, XML, plain text, and — pointedly — *malformed JSON*, which is very often exactly
+the thing the user opened an inspector to look at.
+
+Hence `bytea`, with the UI parsing on read. The fallback is not lossy and the storage is
+not opinionated about what a webhook is allowed to contain.
+
+---
+
+## Q4. Headers go into `jsonb` as an *array* of `{name, value}` rather than an object keyed by name. Why is that not just a style preference?
+
+Because `jsonb`'s lossiness applies only to **object keys**. Array element order and
+duplicate elements are preserved exactly. The array is not avoiding `jsonb` — it is using
+the half of `jsonb` that does not destroy data.
+
+An object keyed by header name would lose two things, both real:
+
+**Duplicates.** HTTP explicitly permits the same field name on multiple lines, and
+`jsonb` collapses duplicate keys with last-wins. `Set-Cookie` is the case that cannot even
+be worked around by folding into one comma-separated value, because it contains commas
+inside its own `Expires` date.
+
+**Order.** An object sorts its keys, so whatever ordering we chose is gone.
+
+There is a third consideration specific to us: a header name is not a well-behaved key. It
+is attacker-controlled, arbitrary bytes in practice, and a JSON object with duplicate or
+strange keys is a worse container than an array of pairs with no such requirements.
+
+Pinned by `TestInsertRequestRoundTrip`, which stores two `X-Custom` headers and asserts both
+come back, in the order they were sent.
+
+---
+
+## Q5. Why is the index `(endpoint_id, received_at desc)` and not `(received_at desc, endpoint_id)`? What does Postgres do differently in each case?
+
+A composite index is one B-tree over the *pair*, sorted by the first column and then by the
+second within each value of the first. The column order determines what it can seek to.
+
+Our query is always `where endpoint_id = $1 order by received_at desc limit N`.
+
+**With `(endpoint_id, received_at desc)`:** Postgres descends the tree to where that
+`endpoint_id` begins — an O(log n) seek — and then walks forward. Because `received_at` is
+the second column, the rows it walks are *already in the order requested*. It reads exactly
+N entries, produces no sort, and discards nothing. Confirmed by `EXPLAIN`: an Index Only
+Scan with no `Sort` node.
+
+**Reversed, `(received_at desc, endpoint_id)`:** the tree is ordered by time across all
+endpoints, so one inbox's rows are scattered along its entire length. Postgres can still
+walk in time order for free, but it must now read and discard every row belonging to every
+other inbox until it accumulates N matches. With a hundred inboxes that is roughly a
+hundred times the reads, and it degrades as you add tenants.
+
+The generalisable rule: **equality columns first, then the range or ordering column.** An
+equality predicate on the leading column is what turns the index into a seek; leading with
+the ordering column gives you free ordering and no filtering.
+
+---
+
+## Q6. We use UUIDv7 for row ids and a separate 128-bit base32 value for the inbox slug. Why can't the UUIDv7 be the slug?
+
+Because unique and unguessable are different properties, and a slug needs the second one.
+
+A UUIDv7 is 48 bits of Unix-millisecond timestamp, 4 version bits, 12 random bits, 2
+variant bits and 62 more random bits — **74 random bits, and 48 knowable ones**. An attacker
+who knows roughly when an inbox was created has already pinned the largest field in it. The
+value is guaranteed unique, and that guarantee says nothing whatever about how hard it is
+to guess.
+
+The slug is the only thing standing between a subdomain scanner and an inbox, so it gets a
+full 128 bits straight from `crypto/rand`, with no structure to erode them.
+
+The neat part is that the property making v7 unsuitable as a secret is precisely the
+property making it excellent as a primary key. The leading timestamp means new rows sort at
+the end of the B-tree, so inserts concentrate on the rightmost page, which stays in cache —
+no page splits scattered across the index, no write amplification. Time-ordering is a
+liability in a secret and an asset in a key.
+
+(UUIDv4 would be acceptable as a secret at 122 random bits. We do not use it because base32
+of 16 raw bytes is denser, DNS-safe, and fits the existing slug whitelist.)
+
+---
+
+## Q7. We hash tokens with a single SHA-256, and I argued bcrypt would be *worse*. Make that argument.
+
+Slow hashes exist to solve exactly one problem: the secret comes from a small space, so an
+attacker holding the hash can enumerate that space offline. A human-chosen password carries
+perhaps 20–30 bits of entropy, which is a few million candidates — trivial at millions of
+hashes per second. bcrypt's work factor makes each attempt cost ~100ms, turning hours into
+centuries. The slowness *is* the defence.
+
+Our token is 256 bits from a CSPRNG. There is no space to enumerate. At a trillion guesses
+per second you would still need vastly longer than the age of the universe. The attack the
+work factor defends against cannot happen, so the work factor defends nothing.
+
+And it is not free. It costs ~100ms of CPU **on every authenticated request** — the user
+pays it, on the happy path, forever. Worse, it hands over a denial-of-service vector: an
+attacker sends a stream of bogus tokens and you burn a CPU core hashing each one before
+rejecting it. You have made yourself slower to verify than the attacker is to guess.
+
+There is a secondary reason, and it is the sharper one: **bcrypt silently truncates its
+input at 72 bytes.** A 43-character token survives, but the general shape — reaching for
+the "more secure" primitive and having it quietly discard entropy — is how a security
+upgrade becomes a downgrade.
+
+The rule worth carrying: *slow hash for low-entropy human secrets, fast hash for
+high-entropy generated ones.* Both answers are right, in their own case.
+
+---
+
+## Q8. `GET /api/endpoints/{slug}/requests` returns the same 401 body for a wrong token and for an inbox that doesn't exist. What does distinguishing them give an attacker?
+
+An oracle — a question the system answers truthfully for free.
+
+With identical responses, reaching someone's data requires guessing a 128-bit slug *and* a
+256-bit token, and the first is already infeasible.
+
+With distinguishable responses — 404 for a missing inbox, 401 for a bad token — the
+existence question is answerable without holding any credential at all. The attacker
+enumerates slugs against the cheap question, discards the overwhelming majority, and is
+left with a list of real inboxes. Two hard problems have become one hard problem plus a
+lookup.
+
+Two things make that worse than it first sounds. Existence is itself information: knowing
+that a particular inbox exists can matter independently of reading it. And an enumerable
+existence check is a far better target for automation than a token check, because it is
+cheap, stateless and unauthenticated — exactly the shape a scanner wants.
+
+Our implementation makes the two indistinguishable at the source rather than at the edge:
+`AuthenticateEndpoint` returns `ErrUnauthorized` for `pgx.ErrNoRows` as well as for a hash
+mismatch, and the HTTP layer has a single `unauthorized()` function with three call sites.
+The moment one of them says something slightly different, the oracle exists again — which
+is why it is one function and not three inline responses.
+
+---
+
+## Q9. A user reads page 1 of their inbox, gets distracted for a minute while three webhooks arrive, then clicks "next page". Trace what they see with `OFFSET 50` and with a cursor.
+
+The list is newest-first, so every arriving row is inserted at **position zero** and pushes
+everything below it down. That is the mechanism; the rest follows.
+
+Call the existing rows `old-99` (newest) down to `old-00`. Page 1 is `OFFSET 0 LIMIT 50`:
+`old-99` … `old-50`.
+
+Three webhooks arrive. They are the newest, so they take positions 0, 1 and 2, and every
+old row shifts down by three. What was at index 50 is now at index 53.
+
+**With `OFFSET 50`:** the query returns indices 50–99 of the *new* ordering, which is
+`old-52` down to `old-03`. The user already saw `old-52`, `old-51` and `old-50` on page 1.
+They see three duplicates and no gap. It looks as though the provider double-delivered —
+which, for a tool whose entire purpose is answering "why did this fire twice", is a
+uniquely bad failure.
+
+Run the same scenario with three *deletions* instead of insertions and the shift goes the
+other way: three rows are skipped, silently, and nothing on screen indicates anything is
+missing. That is the worse direction, because there is no symptom at all.
+
+**With a cursor:** the cursor holds the `(received_at, id)` of `old-50` — the last row the
+user actually saw. Page 2 asks for `where (received_at, id) < (that)`, which returns
+`old-49` onward no matter what has been inserted above it. The cursor names a position *in
+the data*; new rows cannot move it, because it never referred to a count.
+
+Measured in `TestCursorSurvivesInserts`, which does exactly this and logs both results
+side by side.
+
+---
+
+## Q10. `TestIndexIsUsed` originally ran against an almost-empty table and asserted the plan contained no `Sort`. Why was that test meaningless, even while it was passing?
+
+Because the Postgres planner is **cost-based**, not rule-based. It does not use an index
+because one exists; it estimates the cost of each plan and picks the cheapest. On a table of
+a few rows the whole thing fits in one or two pages, so reading all of it sequentially and
+sorting the handful of results genuinely *is* cheaper than descending a B-tree. Choosing the
+sequential scan was the optimiser being correct.
+
+So the test asserted an outcome the planner was never obliged to produce. While it passed,
+it passed for reasons unconnected to whether our index is well designed — the row count and
+the statistics at that moment happened to tip the estimate. Change either and it flips,
+which is exactly what happened.
+
+The general form of the mistake: **a test whose outcome depends on conditions the test does
+not control is testing those conditions, not the code.** And the specific form is worth
+remembering as a rule — *an index assertion against an empty table tests nothing at all*,
+because the one plan you are trying to rule out is the correct plan for that data.
+
+The fix was to make the test control what it depends on: seed 5,000 rows so the index is
+genuinely the cheaper plan, and run `ANALYZE` so the planner works from real statistics
+rather than its default guesses. Now the assertion means something specific — *given a
+realistic table, this index serves this query without a sort.*
+
+---
+
+## Q11. The retention sweeper runs in a goroutine with `defer recover()` inside `sweepOnce`. Why is that necessary here when our HTTP handlers get away without it?
+
+Because `net/http` is doing it for the handlers, and nothing is doing it for a goroutine.
+
+The server runs each connection in its own goroutine with a `recover` wrapped around the
+handler call. A panic in a handler is caught there: that one request dies, a stack trace is
+logged, the connection closes, and every other request continues. This is why experienced
+Go programmers develop the intuition that panics are survivable — in the context most of
+them work in, they are.
+
+A bare `go f()` has no supervisor. There is no frame above it, nothing wrapping it, nobody
+watching. A panic unwinds `f`'s stack, finds no `recover`, and the runtime terminates **the
+entire process**. Every in-flight capture, every open connection, gone.
+
+Which produces a genuinely absurd failure mode: a nil dereference in *housekeeping code
+nobody is waiting on* takes down the webhook capture endpoint for every user. The sweeper is
+the least important thing in the process and, without a recover, the most dangerous.
+
+The `recover` converts that from an outage into a skipped sweep plus a logged stack trace,
+and the next tick tries again.
+
+`TestSweepOncePanicIsContained` forces the case with a nil `*Store`. It is worth noting how
+that test fails if the recover is removed: it does not report a failure, it **crashes the
+test binary** — which is the same thing that would happen in production, demonstrated.
+
+---
+
+## Q12. In `run()`, why is the sweeper given a *derived* cancellable context rather than the signal context directly? What fails if you use the signal context?
+
+`serve()` returns for two quite different reasons, and only one of them involves the signal
+context.
+
+**Normal shutdown:** SIGTERM arrives, the signal context is cancelled, `srv.Shutdown` drains,
+`serve` returns. The sweeper's context is dead too, so it exits and `wg.Wait()` returns
+promptly. Everything works.
+
+**Startup failure:** `ListenAndServe` fails immediately — the port is in use — and `serve`
+returns that error within milliseconds. **Nobody sent a signal.** The signal context is
+perfectly healthy, so the sweeper is still ticking away happily, and `wg.Wait()` blocks
+forever.
+
+The observable result is the worst kind of bug: a trivially diagnosable one-line error
+("address already in use") becomes a process that prints nothing and hangs, and you have to
+interrupt it to discover it was never going to tell you. A clear failure has been converted
+into a mystery.
+
+The derived context fixes it by making both paths identical. Whatever caused `serve` to
+return, `cancel()` runs, the sweeper's `select` takes its `ctx.Done()` branch, `wg.Wait()`
+returns, and the real error propagates.
+
+The ordering of the last three statements is also load-bearing: `cancel()`, then
+`wg.Wait()`, then `return`. The return is what triggers the deferred `st.Close()`, and
+closing the pool out from under an in-flight `DELETE` produces "conn closed" errors on every
+otherwise-clean shutdown — noise that looks like a bug and is not.
