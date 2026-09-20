@@ -16,3 +16,9 @@ web/dist
 compose.yaml
 Dockerfile
 .dockerignore
+
+# The frontend SOURCE is needed (the web stage builds it) but its dependencies
+# are not -- `npm ci` reinstalls them inside the image, and shipping a host
+# node_modules into the context is both enormous and platform-wrong.
+web/node_modules
+internal/webui/dist

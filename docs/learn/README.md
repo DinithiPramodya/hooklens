@@ -44,6 +44,20 @@ last, after the domain question was settled.*
 
 ---
 
+## Phase 2 — The inspector UI
+
+| | Note | Covers |
+|---|---|---|
+| 11 | [SPA vs server-rendered, and `go:embed`](11-spa-and-go-embed.md) | Why nothing here needs SSR · the SPA fallback · what embedding does to the binary · cache headers in opposite directions |
+| 12 | What CORS actually is | Why it exists, and how single-origin sidesteps it |
+| 13 | Server-Sent Events | The wire format · built-in reconnection · SSE vs WebSocket vs polling |
+| 14 | In-process pub/sub | Fan-out · slow consumers · backpressure |
+| 15 | The React side | TanStack Query's cache model · recursive rendering |
+
+**Quiz:** pending — written at the end of the phase.
+
+---
+
 ## Still to come
 
 - **Phase 2 — the inspector UI:** `go:embed`, CORS, SSE, in-process pub/sub, recursive rendering

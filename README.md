@@ -4,19 +4,22 @@ A webhook inspector with a self-hosted tunnel. It gives you a public URL, captur
 request sent to it byte-for-byte, streams them to a web UI, and forwards them to code
 running on your laptop. Replay, diff, and provider-signature verification on top.
 
-> **Status: Phase 1 of 6 complete — the mailbox works.** Requests are captured, stored
+> **Status: Phase 2 of 6 in progress — the UI has a skeleton.** Requests are captured, stored
 > byte-for-byte, authenticated with per-inbox tokens, paginated by cursor, and expired on a
-> retention schedule. There is no UI yet; that is Phase 2, and the tunnel is Phase 3.
+> retention schedule, and the frontend is compiled into the binary. The inspector itself
+> lands over the rest of Phase 2; the tunnel is Phase 3.
 > See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
 
 - Go (version is pinned in `go.mod`)
 - Docker Desktop — on Windows this needs WSL2, so `wsl --install` and a reboot first
+- Node.js 24+ — the frontend is compiled into the binary, so `go build` needs it built first
 
 ## Run it
 
 ```sh
+cd web && npm install && npm run build && cd ..   # frontend, embedded at compile time
 docker compose up -d --wait     # Postgres
 go run ./cmd/hooklens migrate up
 go run ./cmd/hooklens            # serves on :8080
@@ -83,6 +86,8 @@ cmd/hooklens/      main, subcommand dispatch, migrate runner
 internal/config/   environment configuration
 internal/server/   host-based routing, middleware, app routes
 internal/ingest/   the capture endpoint
+internal/webui/    the built frontend, embedded via go:embed
+web/               frontend source (Vite + React + TypeScript)
 migrations/        SQL migrations, embedded via go:embed
 docs/learn/        how each piece works and why it was built this way
 ```
@@ -102,5 +107,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [08 — Capability URLs: entropy, and why tokens are hashed](docs/learn/08-capability-urls.md)
 - [09 — Cursor vs offset pagination](docs/learn/09-pagination.md)
 - [10 — Background workers: goroutines, tickers, and the retention sweep](docs/learn/10-background-workers.md)
+- [11 — SPA vs server-rendered, and what `go:embed` does](docs/learn/11-spa-and-go-embed.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

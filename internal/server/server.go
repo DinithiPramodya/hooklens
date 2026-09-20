@@ -16,6 +16,7 @@ import (
 	"github.com/DinithiPramodya/hooklens/internal/config"
 	"github.com/DinithiPramodya/hooklens/internal/ingest"
 	"github.com/DinithiPramodya/hooklens/internal/store"
+	"github.com/DinithiPramodya/hooklens/internal/webui"
 )
 
 // Server is the root http.Handler for the whole process.
@@ -79,17 +80,21 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	s.ingest.ServeHTTP(w, r2)
 }
 
-// appRoutes is the UI and its API. In Phase 2 the "/" handler is replaced by the
-// embedded React build; for now it is a placeholder.
+// appRoutes is the UI and its API.
+//
+// Registration order in the source does not matter -- Go's ServeMux picks the
+// most SPECIFIC matching pattern, not the first registered. What matters is
+// that the specificity ordering below is the one we want:
+//
+//	GET /api/requests/{id}   most specific: exact path + method
+//	/api/                    prefix: any other API path
+//	/                        prefix: everything else -> the SPA
 func (s *Server) appRoutes() http.Handler {
 	mux := http.NewServeMux()
 
-	// "GET /healthz" and "GET /{$}" are Go 1.22 routing patterns. The method is
-	// part of the pattern, so a POST to /healthz gets 405 from the mux itself.
-	// "/{$}" means exactly "/" -- without the {$}, "/" is a prefix pattern that
-	// matches every unmatched path, which is almost never what you want.
+	// "GET /healthz" is a Go 1.22 routing pattern. The method is part of the
+	// pattern, so a POST to /healthz gets 405 from the mux itself.
 	mux.HandleFunc("GET /healthz", s.handleHealth)
-	mux.HandleFunc("GET /{$}", s.handleIndex)
 
 	// Reads require the inbox owner token in an Authorization header (unit 08).
 	// Creation is deliberately open: there is nobody to authenticate yet, and an
@@ -98,7 +103,28 @@ func (s *Server) appRoutes() http.Handler {
 	mux.HandleFunc("GET /api/endpoints/{slug}/requests", s.handleListRequests)
 	mux.HandleFunc("GET /api/requests/{id}", s.handleGetRequest)
 
+	// Catch-all for the API namespace, and it is not optional.
+	//
+	// Without it, GET /api/typo falls through to the SPA handler below, which
+	// answers 200 with an HTML document -- and the client's fetch() then tries
+	// to JSON.parse a web page. The error you get is a syntax error about "<",
+	// nowhere near the actual mistake. This is the sharp edge named in
+	// docs/learn/11-spa-and-go-embed.md, closed deliberately.
+	mux.HandleFunc("/api/", s.handleAPINotFound)
+
+	// Everything else is the SPA: the embedded build, with a fallback to
+	// index.html for client-side routes. Mounted last in specificity, so it
+	// only ever sees paths nothing above claimed.
+	mux.Handle("/", webui.Handler())
+
 	return mux
+}
+
+func (s *Server) handleAPINotFound(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusNotFound, map[string]string{
+		"error": "no such API endpoint",
+		"path":  r.URL.Path,
+	})
 }
 
 // bearerToken extracts the owner token from the Authorization header.
@@ -260,14 +286,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// fine, which turns a degraded service into an outage. Dependency checks get
 	// their own endpoint in Phase 5.
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"name":        "hooklens",
-		"base_domain": s.cfg.BaseDomain,
-		"note":        "phase 0: the UI lands in phase 2",
-	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

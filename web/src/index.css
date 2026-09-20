@@ -1,0 +1,62 @@
+/*
+ * Minimal, deliberately. Styling is unit 15's problem -- this only needs to
+ * prove the pipeline renders something legible in either colour scheme.
+ */
+:root {
+  --bg: #ffffff;
+  --fg: #16211f;
+  --muted: #5a6866;
+  --accent: #0f6e63;
+  --ok: #2f6b3a;
+  --err: #a8322a;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1514;
+    --fg: #e3eae8;
+    --muted: #94a5a2;
+    --accent: #4fc7b8;
+    --ok: #74bc83;
+    --err: #e08a80;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  line-height: 1.6;
+}
+
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 4rem 1.5rem;
+}
+
+h1 { margin: 0; font-size: 2.25rem; letter-spacing: -0.02em; }
+h2 {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin: 2.5rem 0 0.5rem;
+}
+
+.tagline { color: var(--accent); margin: 0.25rem 0 0; }
+.muted { color: var(--muted); }
+.ok { color: var(--ok); }
+.err { color: var(--err); }
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
