@@ -233,3 +233,52 @@ Go-side coverage:
 
 Parser coverage includes the case that matters most: `event: capture` split across three
 chunks **mid-word**, reassembled correctly.
+
+## Postscript: two things CI caught that local checks did not
+
+Both were found by the first CI run after this unit, and both are worth keeping.
+
+**1. The `.gitkeep` safety net was being deleted by every frontend build.**
+
+Unit 11 committed `internal/webui/dist/.gitkeep` so that a clone with no npm build would
+still compile. The mechanism is sound — verified directly: `//go:embed all:dist` with only
+`.gitkeep` present does compile, and without it the error is
+`cannot embed directory dist: contains no embeddable files`.
+
+What was wrong is that the file did not survive. Vite's `emptyOutDir: true` wipes the
+directory on every build, and a later `git add -A` faithfully recorded the deletion. So the
+placeholder was removed from the repository by the very process it was meant to protect
+against.
+
+The fix is to put `.gitkeep` in `web/public/`, which Vite copies into `dist` *after*
+emptying it. The placeholder is now recreated by every build rather than destroyed by one,
+and the committed copy stays byte-identical so it never shows as modified.
+
+Worth noting **why only CI saw it**: the lint job is the only job without a frontend build
+step, so it is the only place the fresh-clone path is ever exercised. That was not
+deliberate when it was written, and it is now the most valuable property that job has.
+
+**2. `tsc -b` type-checks test files, and they import Node modules.**
+
+`npm test` passed locally, so the test file was added and the unit moved on. `npm run build`
+was never re-run, and it is `tsc -b` inside that script which fails:
+
+```
+src/lib/sse.test.ts(1,22): error TS2591: Cannot find name 'node:test'
+```
+
+The tempting fix is to add `"node"` to `tsconfig.app.json`'s `types`. That is wrong: it
+makes `process.env` and `fs` typecheck as valid inside a React component, turning a build
+error into a runtime one. Instead the tests get their own project — `tsconfig.test.json`
+with `"types": ["node"]`, and `tsconfig.app.json` excludes `*.test.ts`. Verified by putting
+`process.env.HOME` in browser code and confirming it still fails to compile.
+
+One trap in that split: `extends` inherits `exclude`, so the test project initially excluded
+exactly the files it existed to check (`TS18003: No inputs were found`). It needs
+`"exclude": []` explicitly.
+
+**The process lesson is the real one.** Running `npm test` and not `npm run build` after
+adding a file is the same class of mistake as the `.gitignore` bug in Phase 0 — a local
+check that passes because it exercises a different path than the one that ships. The
+standing fix is the fresh-clone verification: `git archive` the index into a clean
+directory and build *that*, which is what CI actually does.
