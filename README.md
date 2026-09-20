@@ -77,8 +77,32 @@ go test ./... -count=1
 cd web && npm test && cd ..   # frontend: node --test, no runner dependency
 ```
 
+### The race detector
+
 `go test -race` needs cgo and therefore a C compiler, which Windows does not have by
-default — CI runs the race detector on Linux.
+default. It runs in CI on Linux, and locally through WSL:
+
+```sh
+wsl -d Ubuntu -u root -- bash -lc \
+  "cd /mnt/d/Projects/webhook-inspector && \
+   DATABASE_URL=postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable \
+   GOFLAGS=-buildvcs=false go test ./... -race -count=1"
+```
+
+About 12 seconds with a warm build cache. Worth having before touching anything
+concurrent -- every race found on this project so far was invisible to a non-race run.
+
+One-time setup inside Ubuntu (`wsl --install -d Ubuntu`):
+
+```sh
+apt-get install -y gcc libc6-dev curl      # libc6-dev is easy to miss; gcc alone
+                                           # fails with "stdlib.h: No such file"
+curl -sSL https://go.dev/dl/goX.Y.Z.linux-amd64.tar.gz -o /tmp/go.tgz
+tar -C /usr/local -xzf /tmp/go.tgz && ln -sf /usr/local/go/bin/go /usr/local/bin/go
+```
+
+Running it in a Docker container instead was tried and abandoned: compiling with
+`-race` over a Windows bind mount crashed Docker Desktop twice.
 
 ## Layout
 
