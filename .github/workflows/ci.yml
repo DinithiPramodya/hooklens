@@ -58,8 +58,8 @@ jobs:
       # time, so `go build` and `go vet` both need the frontend to exist.
       # Without this the build succeeds (dist/.gitkeep satisfies the embed)
       # and silently produces a binary with no UI.
-      - name: build frontend
-        run: npm ci && npm run build
+      - name: frontend — test and build
+        run: npm ci && npm test && npm run build
         working-directory: web
 
       - uses: actions/setup-go@v7

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/DinithiPramodya/hooklens/internal/capture"
 	"github.com/DinithiPramodya/hooklens/internal/config"
@@ -26,20 +27,25 @@ import (
 // the cost is that it will not survive being run as two replicas, because a
 // tunnel held by instance A cannot be reached from instance B.
 type Server struct {
-	cfg     config.Config
-	log     *slog.Logger
-	app     http.Handler
-	ingest  http.Handler
-	store   *store.Store
-	handler http.Handler
+	cfg    config.Config
+	log    *slog.Logger
+	app    http.Handler
+	ingest http.Handler
+	store  *store.Store
+	// heartbeat is how often an idle stream writes a keepalive comment.
+	// A field rather than a constant purely so tests can drive it in
+	// milliseconds instead of waiting 20 seconds per assertion.
+	heartbeat time.Duration
+	handler   http.Handler
 }
 
 func New(cfg config.Config, log *slog.Logger, st *store.Store) *Server {
 	s := &Server{
-		cfg:    cfg,
-		log:    log,
-		store:  st,
-		ingest: ingest.New(log, st, capture.DefaultMaxBody),
+		cfg:       cfg,
+		log:       log,
+		store:     st,
+		ingest:    ingest.New(log, st, capture.DefaultMaxBody),
+		heartbeat: heartbeatInterval,
 	}
 	s.app = s.appRoutes()
 
@@ -102,6 +108,7 @@ func (s *Server) appRoutes() http.Handler {
 	mux.HandleFunc("POST /api/endpoints", s.handleCreateEndpoint)
 	mux.HandleFunc("GET /api/endpoints/{slug}/requests", s.handleListRequests)
 	mux.HandleFunc("GET /api/requests/{id}", s.handleGetRequest)
+	mux.HandleFunc("GET /api/endpoints/{slug}/stream", s.handleStream)
 
 	// Catch-all for the API namespace, and it is not optional.
 	//

@@ -31,6 +31,23 @@ func (rec *statusRecorder) WriteHeader(status int) {
 	rec.ResponseWriter.WriteHeader(status)
 }
 
+// Unwrap exposes the ResponseWriter underneath, and it is not optional.
+//
+// http.ResponseController reaches optional interfaces -- Flusher, Hijacker,
+// SetWriteDeadline -- by walking this method. A wrapper that does not implement
+// it is a wall: the controller cannot see past it and returns
+// errors.ErrUnsupported for everything.
+//
+// Because this wrapper sits in the chain for EVERY request, omitting Unwrap
+// silently disables flushing for the whole application. Server-Sent Events then
+// fail in the most confusing way available -- the handler runs, writes look
+// successful, and the client receives nothing, because nothing is ever flushed.
+// Verified: without this method, both Flush and SetWriteDeadline return
+// "feature not supported" through this middleware.
+func (rec *statusRecorder) Unwrap() http.ResponseWriter {
+	return rec.ResponseWriter
+}
+
 func (rec *statusRecorder) Write(b []byte) (int, error) {
 	// A handler that calls Write without WriteHeader gets an implicit 200. We
 	// have to mirror that here or such responses would log as status 0.

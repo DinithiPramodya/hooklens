@@ -74,6 +74,7 @@ All from the environment, with defaults that work on a clean machine.
 gofmt -l .
 go vet ./...
 go test ./... -count=1
+cd web && npm test && cd ..   # frontend: node --test, no runner dependency
 ```
 
 `go test -race` needs cgo and therefore a C compiler, which Windows does not have by
@@ -109,5 +110,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [10 — Background workers: goroutines, tickers, and the retention sweep](docs/learn/10-background-workers.md)
 - [11 — SPA vs server-rendered, and what `go:embed` does](docs/learn/11-spa-and-go-embed.md)
 - [12 — What CORS actually is, and how single-origin sidesteps it](docs/learn/12-cors.md)
+- [13 — Server-Sent Events](docs/learn/13-server-sent-events.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).
