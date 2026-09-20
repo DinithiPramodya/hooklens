@@ -282,3 +282,31 @@ adding a file is the same class of mistake as the `.gitignore` bug in Phase 0 �
 check that passes because it exercises a different path than the one that ships. The
 standing fix is the fresh-clone verification: `git archive` the index into a clean
 directory and build *that*, which is what CI actually does.
+
+**3. The race detector's first catch was in this unit's own test.**
+
+`TestResponseControllerReachesThroughMiddleware` recorded two errors from inside the
+handler and asserted on them afterwards:
+
+```
+WARNING: DATA RACE
+Read at 0x00c00024f930 by goroutine 48:   sse_test.go:51   (the test)
+Previous write by goroutine 52:            sse_test.go:36   (the handler)
+```
+
+The misconception is a common and specific one: **a completed `http.Get` does not mean the
+handler has returned.** The client has the response the moment it is flushed; the handler
+may still be executing. So reading variables the handler wrote, at that point, is a genuine
+race — not a theoretical one.
+
+The fix is a happens-before edge: `defer close(done)` at the end of the handler, and a
+receive from `done` before the reads.
+
+Worth sitting with the fact that this was only ever visible in CI. `go test -race` needs
+cgo, cgo needs a C compiler, and the Windows development machine has neither — so every
+local run was green. Phase 3 is goroutines around a shared map, where this stops being a
+test-only concern.
+
+Running the detector locally in a Linux container was attempted and abandoned: compiling
+with `-race` over a Windows bind mount crashed Docker Desktop twice. The practical options
+are CI, or `wsl --install -d Ubuntu` and running natively there.

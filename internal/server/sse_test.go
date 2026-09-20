@@ -28,8 +28,19 @@ import (
 func TestResponseControllerReachesThroughMiddleware(t *testing.T) {
 	var flushErr, deadlineErr error
 
+	// The handler runs on the server's goroutine and this test reads its
+	// results from another. A completed http.Get does NOT mean the handler has
+	// returned -- the client has the response as soon as it is flushed, while
+	// the handler may still be executing. Reading the variables at that point
+	// is a data race, and the race detector caught exactly that here.
+	//
+	// Closing this channel after the writes, and receiving from it before the
+	// reads, is the happens-before edge that makes the handoff legal.
+	done := make(chan struct{})
+
 	h := withRecover(quiet(), withRequestLog(quiet(), http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
+			defer close(done)
 			rc := http.NewResponseController(w)
 			deadlineErr = rc.SetWriteDeadline(time.Time{})
 			_, _ = w.Write([]byte("x"))
@@ -44,6 +55,12 @@ func TestResponseControllerReachesThroughMiddleware(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not finish")
+	}
 
 	if deadlineErr != nil {
 		t.Errorf("SetWriteDeadline through middleware: %v -- statusRecorder needs Unwrap()", deadlineErr)
