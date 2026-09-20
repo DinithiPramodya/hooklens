@@ -1,8 +1,13 @@
 # build output
 /bin/
 /dist/
-hooklens
-hooklens.exe
+# Anchored with a leading slash: this is the compiled binary at the repo root.
+# Unanchored, "hooklens" matches any file OR DIRECTORY of that name at any
+# depth -- which silently excluded cmd/hooklens/, so the entire entrypoint was
+# never committed. Everything still built locally, because the files were on
+# disk; CI cloned the repo and found no main package.
+/hooklens
+/hooklens.exe
 
 # local environment
 .env
