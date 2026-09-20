@@ -108,5 +108,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [09 — Cursor vs offset pagination](docs/learn/09-pagination.md)
 - [10 — Background workers: goroutines, tickers, and the retention sweep](docs/learn/10-background-workers.md)
 - [11 — SPA vs server-rendered, and what `go:embed` does](docs/learn/11-spa-and-go-embed.md)
+- [12 — What CORS actually is, and how single-origin sidesteps it](docs/learn/12-cors.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

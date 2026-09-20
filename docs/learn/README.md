@@ -49,7 +49,7 @@ last, after the domain question was settled.*
 | | Note | Covers |
 |---|---|---|
 | 11 | [SPA vs server-rendered, and `go:embed`](11-spa-and-go-embed.md) | Why nothing here needs SSR · the SPA fallback · what embedding does to the binary · cache headers in opposite directions |
-| 12 | What CORS actually is | Why it exists, and how single-origin sidesteps it |
+| 12 | [What CORS actually is](12-cors.md) | Why the *browser* enforces it · preflights and what triggers them · why single-origin removes the category |
 | 13 | Server-Sent Events | The wire format · built-in reconnection · SSE vs WebSocket vs polling |
 | 14 | In-process pub/sub | Fan-out · slow consumers · backpressure |
 | 15 | The React side | TanStack Query's cache model · recursive rendering |
