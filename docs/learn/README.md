@@ -52,7 +52,8 @@ last, after the domain question was settled.*
 | 12 | [What CORS actually is](12-cors.md) | Why the *browser* enforces it · preflights and what triggers them · why single-origin removes the category |
 | 13 | [Server-Sent Events](13-server-sent-events.md) | The wire format · why you must flush · reconnection and why we hand-rolled it · `Unwrap` and wrapped ResponseWriters |
 | 14 | [In-process pub/sub](14-pubsub.md) | Fan-out and why one channel will not do · the four answers to a slow consumer · why the send is under the lock |
-| 15 | The React side | TanStack Query's cache model · recursive rendering |
+| 15 | [Server state, and TanStack Query](15-server-state.md) | Client vs server state · the query key is the cache identity · why setQueryData beats invalidate here |
+| 16 | Recursive rendering | The JSON tree and the detail pane |
 
 **Quiz:** pending — written at the end of the phase.
 

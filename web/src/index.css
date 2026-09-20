@@ -83,3 +83,45 @@ code {
 
 .events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
 .events li { font-size: 0.9rem; }
+
+.row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.url { font-size: 0.95rem; }
+
+.dot { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: var(--muted); }
+.dot-live { background: var(--ok); }
+.dot-retrying { background: var(--err); }
+.dot-connecting { background: var(--muted); }
+
+button.link {
+  border: none; background: none; padding: 0; color: var(--muted);
+  text-decoration: underline; cursor: pointer; font-size: 0.85rem;
+}
+button.link:hover { color: var(--fg); background: none; }
+button:disabled { opacity: 0.6; cursor: default; }
+
+.captures { list-style: none; margin: 0.75rem 0 0; padding: 0; }
+.captures li {
+  display: grid;
+  grid-template-columns: 3.5rem 1fr auto auto;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  font-size: 0.9rem;
+}
+.method {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.m-post { color: var(--ok); }
+.m-delete { color: var(--err); }
+.path { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.size, .when { font-size: 0.8rem; white-space: nowrap; }
+
+@media (max-width: 34rem) {
+  .captures li { grid-template-columns: 3.5rem 1fr; }
+  .size, .when { grid-column: 2; }
+}

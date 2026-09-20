@@ -1,137 +1,112 @@
-import { useCallback, useEffect, useState } from 'react'
-import { streamEvents, type SSEEvent } from './lib/sse'
-
-type Inbox = { slug: string; token: string }
-
-// localStorage, deliberately, and only until unit 15 designs this properly.
-// The token cannot be recovered from the server -- it is stored only as a
-// SHA-256 -- so losing it on refresh would mean losing the inbox.
-const STORAGE_KEY = 'hooklens.inbox'
-
-function loadInbox(): Inbox | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as Inbox) : null
-  } catch {
-    return null
-  }
-}
-
-type Row = SSEEvent & { at: string }
+import { useState } from 'react'
+import { createInbox } from './lib/api'
+import { useLiveCaptures, useRequests, useStoredInbox } from './lib/useInbox'
 
 export default function App() {
-  const [inbox, setInbox] = useState<Inbox | null>(loadInbox)
-  const [status, setStatus] = useState<'idle' | 'connecting' | 'live' | 'retrying'>('idle')
-  const [events, setEvents] = useState<Row[]>([])
-  const [dropped, setDropped] = useState(0)
-  const [error, setError] = useState<string | null>(null)
+  const { inbox, setInbox } = useStoredInbox()
+  const { status, dropped } = useLiveCaptures(inbox)
+  const { data, isLoading, error } = useRequests(inbox)
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
 
-  const createInbox = useCallback(async () => {
-    setError(null)
+  async function onCreate() {
+    setCreating(true)
+    setCreateError(null)
     try {
-      const resp = await fetch('/api/endpoints', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'browser' }),
-      })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      const data = (await resp.json()) as Inbox
-      const next = { slug: data.slug, token: data.token }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-      setInbox(next)
-      setEvents([])
-      setDropped(0)
+      const created = await createInbox()
+      setInbox({ slug: created.slug, token: created.token })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setCreateError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCreating(false)
     }
-  }, [])
+  }
 
-  // One stream per inbox, torn down on change or unmount.
-  //
-  // The cleanup return is load-bearing: without it, StrictMode's deliberate
-  // double-mount in development leaves an orphaned connection open, and every
-  // inbox change would add another. They would all keep receiving, and the
-  // event list would show duplicates from connections nobody can see.
-  useEffect(() => {
-    if (!inbox) return
+  if (!inbox) {
+    return (
+      <main>
+        <Header />
+        <section>
+          <h2>get started</h2>
+          <p className="muted">
+            An inbox gives you a URL to paste into a provider, and a token that is shown
+            once and stored only as a hash.
+          </p>
+          <button onClick={onCreate} disabled={creating}>
+            {creating ? 'creating…' : 'Create an inbox'}
+          </button>
+          {createError && <p className="err">{createError}</p>}
+        </section>
+      </main>
+    )
+  }
 
-    setStatus('connecting')
-    return streamEvents(`/api/endpoints/${inbox.slug}/stream`, inbox.token, {
-      onOpen: () => setStatus('live'),
-      onError: () => setStatus('retrying'),
-      onEvent: (e) => {
-        // A `dropped` event means the broker discarded messages because this
-        // tab fell behind. Surfaced rather than swallowed: a silently
-        // incomplete list is worse than a visible gap, because the user cannot
-        // tell the difference between "nothing arrived" and "I missed it".
-        if (e.event === 'dropped') {
-          try {
-            const { count } = JSON.parse(e.data) as { count: number }
-            setDropped((n) => n + count)
-          } catch {
-            setDropped((n) => n + 1)
-          }
-          return
-        }
-        setEvents((prev) =>
-          [{ ...e, at: new Date().toLocaleTimeString() }, ...prev].slice(0, 50),
-        )
-      },
-    })
-  }, [inbox])
+  const requests = data?.requests ?? []
 
   return (
     <main>
+      <Header />
+
+      <section>
+        <div className="row">
+          <code className="url">/e/{inbox.slug}/</code>
+          <span className={`dot dot-${status}`} aria-hidden="true" />
+          <span className="muted">{status}</span>
+          <button className="link" onClick={() => setInbox(null)}>
+            forget
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <h2>
+          captures{requests.length > 0 && ` (${requests.length})`}
+        </h2>
+
+        {dropped > 0 && (
+          <p className="err">missed {dropped} while this tab was behind — reload to resync</p>
+        )}
+        {isLoading && <p className="muted">loading…</p>}
+        {error && <p className="err">{error instanceof Error ? error.message : 'failed'}</p>}
+
+        {!isLoading && requests.length === 0 && (
+          <p className="muted">
+            nothing yet — try{' '}
+            <code>
+              curl -X POST localhost:8080/e/{inbox.slug}/webhook -d '{'{'}"hi":1{'}'}'
+            </code>
+          </p>
+        )}
+
+        <ul className="captures">
+          {requests.map((r) => (
+            <li key={r.id}>
+              <span className={`method m-${r.method.toLowerCase()}`}>{r.method}</span>
+              <span className="path">
+                {r.path}
+                {r.query && <span className="muted">?{r.query}</span>}
+              </span>
+              <span className="muted size">
+                {r.body_size} B{r.body_truncated && ' (truncated)'}
+              </span>
+              <span className="muted when">{new Date(r.received_at).toLocaleTimeString()}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <footer>Phase 2, unit 5 — the list is live. The detail pane lands in unit 16.</footer>
+    </main>
+  )
+}
+
+function Header() {
+  return (
+    <>
       <h1>hooklens</h1>
       <p className="tagline">
         see what your webhooks actually send — then send them to localhost
       </p>
-
-      {!inbox ? (
-        <section>
-          <h2>get started</h2>
-          <button onClick={createInbox}>Create an inbox</button>
-          {error && <p className="err">{error}</p>}
-        </section>
-      ) : (
-        <>
-          <section>
-            <h2>your inbox</h2>
-            <p>
-              <code>/e/{inbox.slug}/</code>
-            </p>
-            <p className={status === 'live' ? 'ok' : status === 'retrying' ? 'err' : 'muted'}>
-              stream: {status}
-            </p>
-          </section>
-
-          <section>
-            <h2>captures ({events.length})</h2>
-            {dropped > 0 && (
-              <p className="err">
-                missed {dropped} while this tab was behind — reload to resync
-              </p>
-            )}
-            {events.length === 0 && (
-              <p className="muted">
-                waiting — try <code>curl -X POST localhost:8080/e/{inbox.slug}/webhook -d '{'{'}"hi":1{'}'}'</code>
-              </p>
-            )}
-            <ul className="events">
-              {events.map((e, i) => (
-                <li key={i}>
-                  <span className="muted">{e.at}</span> <strong>{e.event}</strong>{' '}
-                  <code>{e.data}</code>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </>
-      )}
-
-      <footer>
-        Phase 2, unit 4 — captures arrive live. The inspector proper lands in unit 15.
-      </footer>
-    </main>
+    </>
   )
 }

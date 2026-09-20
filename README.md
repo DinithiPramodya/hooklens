@@ -137,5 +137,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [12 — What CORS actually is, and how single-origin sidesteps it](docs/learn/12-cors.md)
 - [13 — Server-Sent Events](docs/learn/13-server-sent-events.md)
 - [14 — In-process pub/sub: fan-out, slow consumers, backpressure](docs/learn/14-pubsub.md)
+- [15 — Server state, and TanStack Query's cache model](docs/learn/15-server-state.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).
