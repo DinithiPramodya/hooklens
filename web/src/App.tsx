@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { streamEvents, type SSEEvent } from './lib/sse'
 
 type Inbox = { slug: string; token: string }
@@ -17,10 +17,13 @@ function loadInbox(): Inbox | null {
   }
 }
 
+type Row = SSEEvent & { at: string }
+
 export default function App() {
   const [inbox, setInbox] = useState<Inbox | null>(loadInbox)
   const [status, setStatus] = useState<'idle' | 'connecting' | 'live' | 'retrying'>('idle')
-  const [events, setEvents] = useState<Array<SSEEvent & { at: string }>>([])
+  const [events, setEvents] = useState<Row[]>([])
+  const [dropped, setDropped] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
   const createInbox = useCallback(async () => {
@@ -37,6 +40,7 @@ export default function App() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
       setInbox(next)
       setEvents([])
+      setDropped(0)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -48,25 +52,32 @@ export default function App() {
   // double-mount in development leaves an orphaned connection open, and every
   // inbox change would add another. They would all keep receiving, and the
   // event list would show duplicates from connections nobody can see.
-  const streamRef = useRef<(() => void) | null>(null)
   useEffect(() => {
     if (!inbox) return
 
     setStatus('connecting')
-    const close = streamEvents(
-      `/api/endpoints/${inbox.slug}/stream`,
-      inbox.token,
-      {
-        onOpen: () => setStatus('live'),
-        onError: () => setStatus('retrying'),
-        onEvent: (e) =>
-          setEvents((prev) =>
-            [{ ...e, at: new Date().toLocaleTimeString() }, ...prev].slice(0, 50),
-          ),
+    return streamEvents(`/api/endpoints/${inbox.slug}/stream`, inbox.token, {
+      onOpen: () => setStatus('live'),
+      onError: () => setStatus('retrying'),
+      onEvent: (e) => {
+        // A `dropped` event means the broker discarded messages because this
+        // tab fell behind. Surfaced rather than swallowed: a silently
+        // incomplete list is worse than a visible gap, because the user cannot
+        // tell the difference between "nothing arrived" and "I missed it".
+        if (e.event === 'dropped') {
+          try {
+            const { count } = JSON.parse(e.data) as { count: number }
+            setDropped((n) => n + count)
+          } catch {
+            setDropped((n) => n + 1)
+          }
+          return
+        }
+        setEvents((prev) =>
+          [{ ...e, at: new Date().toLocaleTimeString() }, ...prev].slice(0, 50),
+        )
       },
-    )
-    streamRef.current = close
-    return close
+    })
   }, [inbox])
 
   return (
@@ -95,8 +106,17 @@ export default function App() {
           </section>
 
           <section>
-            <h2>events ({events.length})</h2>
-            {events.length === 0 && <p className="muted">waiting…</p>}
+            <h2>captures ({events.length})</h2>
+            {dropped > 0 && (
+              <p className="err">
+                missed {dropped} while this tab was behind — reload to resync
+              </p>
+            )}
+            {events.length === 0 && (
+              <p className="muted">
+                waiting — try <code>curl -X POST localhost:8080/e/{inbox.slug}/webhook -d '{'{'}"hi":1{'}'}'</code>
+              </p>
+            )}
             <ul className="events">
               {events.map((e, i) => (
                 <li key={i}>
@@ -110,7 +130,7 @@ export default function App() {
       )}
 
       <footer>
-        Phase 2, unit 3 — the stream is live. Captures start flowing through it in unit 14.
+        Phase 2, unit 4 — captures arrive live. The inspector proper lands in unit 15.
       </footer>
     </main>
   )

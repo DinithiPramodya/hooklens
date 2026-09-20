@@ -111,6 +111,7 @@ cmd/hooklens/      main, subcommand dispatch, migrate runner
 internal/config/   environment configuration
 internal/server/   host-based routing, middleware, app routes
 internal/ingest/   the capture endpoint
+internal/broker/   in-process pub-sub, captures to open streams
 internal/webui/    the built frontend, embedded via go:embed
 web/               frontend source (Vite + React + TypeScript)
 migrations/        SQL migrations, embedded via go:embed
@@ -135,5 +136,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [11 — SPA vs server-rendered, and what `go:embed` does](docs/learn/11-spa-and-go-embed.md)
 - [12 — What CORS actually is, and how single-origin sidesteps it](docs/learn/12-cors.md)
 - [13 — Server-Sent Events](docs/learn/13-server-sent-events.md)
+- [14 — In-process pub/sub: fan-out, slow consumers, backpressure](docs/learn/14-pubsub.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

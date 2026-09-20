@@ -146,11 +146,26 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.log.Info("stream opened", "inbox", ep.Slug)
-	defer s.log.Info("stream closed", "inbox", ep.Slug)
+	// Subscribe AFTER the connected event, so the client is already listening
+	// before anything can be queued for it.
+	//
+	// The defer is not optional: without it, a client that disappears leaves a
+	// subscriber in the broker forever, and every subsequent capture writes
+	// into a queue nobody reads. Unsubscribe also closes the channel, which is
+	// what ends the range below.
+	sub := s.broker.Subscribe(ep.ID)
+	defer s.broker.Unsubscribe(ep.ID, sub)
+
+	s.log.Info("stream opened", "inbox", ep.Slug, "watchers", s.broker.Subscribers(ep.ID))
 
 	ticker := time.NewTicker(s.heartbeat)
 	defer ticker.Stop()
+
+	// dropped is compared against the broker's count each time round, so the
+	// client is told the moment it starts missing events rather than at the
+	// end. A viewer silently shown an incomplete list is the failure the whole
+	// drop-counting design exists to prevent.
+	var reported int
 
 	for {
 		select {
@@ -159,9 +174,30 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			// dropped. r.Context() is cancelled by net/http when the connection
 			// closes, which is the only reliable signal -- a write to a dead
 			// connection can succeed into a kernel buffer and tell us nothing.
+			s.log.Info("stream closed", "inbox", ep.Slug, "dropped", s.broker.Dropped(sub))
 			return
 
+		case m, ok := <-sub.C():
+			if !ok {
+				// The broker closed our channel, which only happens via the
+				// deferred Unsubscribe above -- so this is shutdown, not an
+				// error.
+				return
+			}
+			if err := sse.event(m.Event, m.Data); err != nil {
+				return
+			}
+
 		case <-ticker.C:
+			// Report any newly dropped messages before the keepalive, so a
+			// client that has fallen behind learns about it on the next tick
+			// even if no further captures arrive.
+			if n := s.broker.Dropped(sub); n > reported {
+				if err := sse.event("dropped", fmt.Sprintf(`{"count":%d}`, n-reported)); err != nil {
+					return
+				}
+				reported = n
+			}
 			if err := sse.comment("keepalive"); err != nil {
 				// A failed write means the connection is gone. Not worth an
 				// error log: this is how streams normally end.

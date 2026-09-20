@@ -367,3 +367,108 @@ func TestStreamStopsWhenClientLeaves(t *testing.T) {
 	t.Errorf("goroutine count did not fall after the client left (%d -> %d)",
 		before, runtime.NumGoroutine())
 }
+
+// TestCaptureReachesTheStream is the unit's point: a webhook POSTed to the
+// capture endpoint appears on an already-open stream, with no polling and no
+// refresh.
+func TestCaptureReachesTheStream(t *testing.T) {
+	s, ep := storeServer(t, time.Hour) // heartbeat far away; we want capture events only
+	srv := sseTestServer(t, s)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/endpoints/"+ep.Slug+"/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+ep.Token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+
+	// Read past the retry directive and the connected event, so the stream is
+	// definitely subscribed before the capture is sent. Without this the
+	// capture can be published before Subscribe runs and the test flakes.
+	waitFor(t, br, "event: connected")
+
+	// Now POST a webhook the way a provider would.
+	post, err := http.Post(srv.URL+"/e/"+ep.Slug+"/webhook",
+		"application/json", strings.NewReader(`{"type":"payment.succeeded"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	post.Body.Close()
+	if post.StatusCode != http.StatusOK {
+		t.Fatalf("capture returned %d", post.StatusCode)
+	}
+
+	got := waitFor(t, br, "event: capture")
+	for _, want := range []string{`"method":"POST"`, `"path":"/webhook"`, `"body_size":28`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("capture event missing %s:\n%s", want, got)
+		}
+	}
+	// The body itself must NOT be streamed -- the event is a summary, and a
+	// client wanting bytes fetches them.
+	if strings.Contains(got, "payment.succeeded") {
+		t.Errorf("the request body was streamed; it should be a summary only:\n%s", got)
+	}
+}
+
+// TestCaptureDoesNotBlockOnADeadStream: a subscriber that has stopped reading
+// must not slow the capture path, because a provider is waiting on it.
+func TestCaptureDoesNotBlockOnADeadStream(t *testing.T) {
+	s, ep := storeServer(t, time.Hour)
+	srv := sseTestServer(t, s)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/endpoints/"+ep.Slug+"/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+ep.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	// Deliberately never read from resp.Body again. This is a backgrounded tab.
+
+	start := time.Now()
+	for range 40 {
+		post, err := http.Post(srv.URL+"/e/"+ep.Slug+"/x", "application/json",
+			strings.NewReader(`{"n":1}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		post.Body.Close()
+		if post.StatusCode != http.StatusOK {
+			t.Fatalf("capture returned %d", post.StatusCode)
+		}
+	}
+	if elapsed := time.Since(start); elapsed > 15*time.Second {
+		t.Errorf("40 captures took %v against a stream that stopped reading -- "+
+			"the publisher is blocking", elapsed)
+	}
+}
+
+// waitFor reads lines until one contains want, or the test times out.
+func waitFor(t *testing.T, br *bufio.Reader, want string) string {
+	t.Helper()
+	var seen strings.Builder
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read while waiting for %q: %v\nso far:\n%s", want, err, seen.String())
+		}
+		seen.WriteString(line)
+		if strings.Contains(line, want) {
+			// Read the event's data line too, which is the line after.
+			data, _ := br.ReadString('\n')
+			seen.WriteString(data)
+			return seen.String()
+		}
+	}
+	t.Fatalf("timed out waiting for %q\nsaw:\n%s", want, seen.String())
+	return ""
+}

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/DinithiPramodya/hooklens/internal/broker"
 	"github.com/DinithiPramodya/hooklens/internal/capture"
 	"github.com/DinithiPramodya/hooklens/internal/store"
 )
@@ -44,14 +45,15 @@ func SlugFrom(ctx context.Context) string {
 type Handler struct {
 	log     *slog.Logger
 	store   *store.Store
+	broker  *broker.Broker
 	maxBody int64
 }
 
-func New(log *slog.Logger, st *store.Store, maxBody int64) *Handler {
+func New(log *slog.Logger, st *store.Store, br *broker.Broker, maxBody int64) *Handler {
 	if maxBody <= 0 {
 		maxBody = capture.DefaultMaxBody
 	}
-	return &Handler{log: log, store: st, maxBody: maxBody}
+	return &Handler{log: log, store: st, broker: br, maxBody: maxBody}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -136,6 +138,17 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 		h.log.Warn("touch endpoint failed", "inbox", slug, "err", err)
 	}
 
+	// Notify anyone watching this inbox. Below the durability line, and safe to
+	// be here for two reasons: Publish cannot block (a backgrounded browser tab
+	// must never stall a provider's request), and it cannot fail -- there is no
+	// error to accidentally turn into a non-2xx.
+	//
+	// Note this is NOT the request itself. The event carries an id and enough
+	// to render a row; a client wanting the body fetches it. Streaming up to a
+	// megabyte of body to every open tab on every capture would make one large
+	// webhook a fan-out problem.
+	h.publish(ep.ID, id, req)
+
 	h.log.Info("captured",
 		"id", id,
 		"inbox", slug,
@@ -159,4 +172,37 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// publish announces a capture to anyone streaming this inbox.
+//
+// Deliberately silent on failure: it sits below the durability line, so the
+// only honest response to a problem here is a log line. Returning an error
+// would invite a caller to turn it into a non-2xx, which is the bug this
+// ordering exists to prevent.
+func (h *Handler) publish(endpointID, requestID string, req *capture.Request) {
+	// Skip the serialisation entirely when nobody is listening, which is the
+	// common case -- most inboxes have no browser attached most of the time.
+	if h.broker == nil || h.broker.Subscribers(endpointID) == 0 {
+		return
+	}
+
+	// A summary, not the request. See the call site for why the body is not
+	// included.
+	payload, err := json.Marshal(map[string]any{
+		"id":             requestID,
+		"method":         req.Method,
+		"path":           req.Path,
+		"query":          req.Query,
+		"body_size":      len(req.Body),
+		"body_truncated": req.Truncated,
+		"header_count":   len(req.Headers),
+		"received_at":    req.ReceivedAt,
+	})
+	if err != nil {
+		h.log.Error("marshal capture event", "err", err)
+		return
+	}
+
+	h.broker.Publish(endpointID, broker.Message{Event: "capture", Data: string(payload)})
 }

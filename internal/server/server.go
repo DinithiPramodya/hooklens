@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DinithiPramodya/hooklens/internal/broker"
 	"github.com/DinithiPramodya/hooklens/internal/capture"
 	"github.com/DinithiPramodya/hooklens/internal/config"
 	"github.com/DinithiPramodya/hooklens/internal/ingest"
@@ -32,6 +33,10 @@ type Server struct {
 	app    http.Handler
 	ingest http.Handler
 	store  *store.Store
+	// broker fans captures out to open streams. Owned here rather than passed
+	// in, because its lifetime is exactly this Server's -- it holds no
+	// resources to close and nothing outside the process shares it.
+	broker *broker.Broker
 	// heartbeat is how often an idle stream writes a keepalive comment.
 	// A field rather than a constant purely so tests can drive it in
 	// milliseconds instead of waiting 20 seconds per assertion.
@@ -40,11 +45,13 @@ type Server struct {
 }
 
 func New(cfg config.Config, log *slog.Logger, st *store.Store) *Server {
+	br := broker.New()
 	s := &Server{
 		cfg:       cfg,
 		log:       log,
 		store:     st,
-		ingest:    ingest.New(log, st, capture.DefaultMaxBody),
+		broker:    br,
+		ingest:    ingest.New(log, st, br, capture.DefaultMaxBody),
 		heartbeat: heartbeatInterval,
 	}
 	s.app = s.appRoutes()

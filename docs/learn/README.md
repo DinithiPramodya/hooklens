@@ -51,7 +51,7 @@ last, after the domain question was settled.*
 | 11 | [SPA vs server-rendered, and `go:embed`](11-spa-and-go-embed.md) | Why nothing here needs SSR · the SPA fallback · what embedding does to the binary · cache headers in opposite directions |
 | 12 | [What CORS actually is](12-cors.md) | Why the *browser* enforces it · preflights and what triggers them · why single-origin removes the category |
 | 13 | [Server-Sent Events](13-server-sent-events.md) | The wire format · why you must flush · reconnection and why we hand-rolled it · `Unwrap` and wrapped ResponseWriters |
-| 14 | In-process pub/sub | Fan-out · slow consumers · backpressure |
+| 14 | [In-process pub/sub](14-pubsub.md) | Fan-out and why one channel will not do · the four answers to a slow consumer · why the send is under the lock |
 | 15 | The React side | TanStack Query's cache model · recursive rendering |
 
 **Quiz:** pending — written at the end of the phase.
