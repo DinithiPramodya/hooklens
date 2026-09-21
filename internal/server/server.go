@@ -17,6 +17,7 @@ import (
 	"github.com/DinithiPramodya/hooklens/internal/broker"
 	"github.com/DinithiPramodya/hooklens/internal/config"
 	"github.com/DinithiPramodya/hooklens/internal/ingest"
+	"github.com/DinithiPramodya/hooklens/internal/replay"
 	"github.com/DinithiPramodya/hooklens/internal/store"
 	"github.com/DinithiPramodya/hooklens/internal/tunnel"
 	"github.com/DinithiPramodya/hooklens/internal/webui"
@@ -49,6 +50,9 @@ type Server struct {
 	// tunnel serves the CLI's WebSocket. Its lifetime is the process, not a
 	// request: see the comment on its baseCtx.
 	tunnel *tunnel.Server
+	// replayClient refuses private and link-local destinations. Built once:
+	// it holds a connection pool, and a per-request client would discard it.
+	replayClient *http.Client
 }
 
 // New builds the root handler.
@@ -89,6 +93,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.Sto
 		tunnel.Options{},
 	)
 
+	s.replayClient = replay.SafeClient(replayTimeout)
 	s.ingest = ingest.New(log, st, br, s.tunnel.Hub(), cfg.MaxBody)
 	s.app = s.appRoutes()
 
@@ -154,6 +159,7 @@ func (s *Server) appRoutes() http.Handler {
 	// POST because it carries a secret, which must never reach a query
 	// string -- see the handler.
 	mux.HandleFunc("POST /api/requests/{id}/verify", s.handleVerify)
+	mux.HandleFunc("POST /api/requests/{id}/replay", s.handleReplay)
 	mux.HandleFunc("GET /api/endpoints/{slug}/stream", s.handleStream)
 
 	// The tunnel. One connection per CLI, authenticated by its first frame

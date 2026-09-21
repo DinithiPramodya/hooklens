@@ -176,5 +176,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [24 — Size limits at every boundary](docs/learn/24-size-limits.md)
 - [25 — Showing delivery: three states, not two](docs/learn/25-showing-delivery.md)
 - [26 — Hashes, MACs, HMAC, and comparing without leaking](docs/learn/26-hmac.md)
+- [27 — Replay: the same mechanism as the attack](docs/learn/27-replay-and-ssrf.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

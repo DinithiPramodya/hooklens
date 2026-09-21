@@ -89,6 +89,7 @@ last, after the domain question was settled.*
 | | Note | Covers |
 |---|---|---|
 | 26 | [Hashes, MACs and HMAC](26-hmac.md) | Why a plain hash proves nothing · length extension, and why hashing secret-then-body is broken · MAC vs signature · timing attacks and constant-time comparison |
+| 27 | [Replay and SSRF](27-replay-and-ssrf.md) | The feature and the attack are the same bytes · why the guard must run at the dial, not before · DNS rebinding · what `IsGlobalUnicast` does not mean |
 
 **Quiz:** pending — written at the end of the phase.
 
