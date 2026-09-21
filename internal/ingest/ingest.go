@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DinithiPramodya/hooklens/internal/broker"
@@ -64,7 +65,28 @@ type Handler struct {
 	limiter Limiter
 	// rec records metrics. Nil is fine, for the same reason as the others.
 	rec Recorder
+
+	// touchMu guards touched.
+	touchMu sync.Mutex
+	// touched remembers when each inbox's last_seen_at was last written, so
+	// the write can be skipped for the rest of the interval.
+	//
+	// This exists because of a load test. Every capture used to
+	// `update endpoints set last_seen_at = ...` for its inbox -- and at 1,000
+	// req/s to ONE inbox, that is a thousand updates a second to a single
+	// row. Postgres takes a row lock per update, so they serialise: the
+	// pipeline topped out at 280 req/s while the same database could absorb
+	// 2,000 inserts/s, because inserts go to different rows and these all
+	// went to the same one. The bottleneck was a column nobody looks at more
+	// than once a minute. See docs/learn/33-load-testing.md.
+	touched map[string]time.Time
 }
+
+// touchInterval is how stale last_seen_at is allowed to get.
+//
+// The column drives a "last active" display. A minute of staleness is
+// invisible there and removes 99.9% of the writes at any interesting rate.
+const touchInterval = time.Minute
 
 func New(log *slog.Logger, st *store.Store, br *broker.Broker, fwd Forwarder, maxBody int64) *Handler {
 	if maxBody <= 0 {
@@ -73,6 +95,7 @@ func New(log *slog.Logger, st *store.Store, br *broker.Broker, fwd Forwarder, ma
 	return &Handler{
 		log: log, store: st, broker: br, fwd: fwd, maxBody: maxBody,
 		forwardTimeout: defaultForwardTimeout,
+		touched:        map[string]time.Time{},
 	}
 }
 
@@ -191,8 +214,12 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 	// already hold -- the exact bug from Phase 0 quiz Q1.
 
 	// Best-effort, deliberately ignoring the error: last_seen_at is a nicety.
-	if err := h.store.TouchEndpoint(ctx, ep.ID, req.ReceivedAt); err != nil {
-		h.log.Warn("touch endpoint failed", "inbox", slug, "err", err)
+	// Coalesced, because a nicety that costs a serialised row lock per
+	// capture is the most expensive thing in this handler -- see shouldTouch.
+	if h.shouldTouch(ep.ID, req.ReceivedAt) {
+		if err := h.store.TouchEndpoint(ctx, ep.ID, req.ReceivedAt); err != nil {
+			h.log.Warn("touch endpoint failed", "inbox", slug, "err", err)
+		}
 	}
 
 	// Notify anyone watching this inbox. Below the durability line, and safe to
@@ -522,3 +549,56 @@ type Recorder interface {
 
 // SetRecorder installs a metrics recorder. Before serving, no lock.
 func (h *Handler) SetRecorder(r Recorder) { h.rec = r }
+
+// shouldTouch reports whether this inbox's last_seen_at is due for a write,
+// and records the decision.
+//
+// The whole point is to keep at most one UPDATE per inbox per touchInterval
+// instead of one per capture. The map is keyed by endpoint id, so inboxes do
+// not contend with each other; only the mutex is shared, and it is held for
+// a map lookup rather than a database round trip.
+//
+// It marks the inbox as touched BEFORE the write happens, not after. That is
+// deliberate: if the update fails, the next capture within the interval will
+// not retry it, and that is correct -- last_seen_at is a nicety, and retrying
+// a failing write once per capture is how a nicety becomes an outage. The
+// next interval tries again.
+//
+// Per-process, so N instances write at most N times per interval. That is
+// fine at any N worth deploying, and the alternative -- a shared counter --
+// would mean a round trip to coordinate avoiding a round trip.
+func (h *Handler) shouldTouch(endpointID string, now time.Time) bool {
+	h.touchMu.Lock()
+	defer h.touchMu.Unlock()
+
+	if last, ok := h.touched[endpointID]; ok && now.Sub(last) < touchInterval {
+		return false
+	}
+	h.touched[endpointID] = now
+	return true
+}
+
+// EvictTouched forgets inboxes not seen for idle, and returns how many.
+//
+// Without this the map is a slow leak: one entry per inbox that ever received
+// a capture, for the life of the process. Forgetting an entry is always safe
+// -- it costs one extra UPDATE on the next capture, which is exactly what
+// would have happened anyway once the interval elapsed.
+//
+// Called by the sweeper on its existing tick, for the same reason
+// EvictLimiters is: a second goroutine for a map cleanup would be a second
+// thing to shut down.
+func (h *Handler) EvictTouched(idle time.Duration) int {
+	h.touchMu.Lock()
+	defer h.touchMu.Unlock()
+
+	cutoff := time.Now().Add(-idle)
+	n := 0
+	for id, at := range h.touched {
+		if at.Before(cutoff) {
+			delete(h.touched, id)
+			n++
+		}
+	}
+	return n
+}

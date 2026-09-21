@@ -107,6 +107,31 @@ go test ./... -count=1
 cd web && npm test && cd ..   # frontend: node --test, no runner dependency
 ```
 
+### The load test
+
+Behind a build tag, so it never taxes `go test ./...` and never runs in CI -- a
+shared runner under an unknown neighbour's load produces a throughput number that
+means nothing.
+
+```sh
+go test -tags loadtest -run TestLoad -timeout 5m ./internal/server/ -v
+```
+
+Defaults to 1,000 req/s for 60 seconds; override with `HOOKLENS_LOAD_RATE`,
+`HOOKLENS_LOAD_SECONDS`, `HOOKLENS_LOAD_WORKERS`. It asserts zero dropped captures,
+which here means the server's 2xx count, the `hooklens_captures_total` metric and the
+row count in Postgres are all equal. See
+[docs/learn/33-load-testing.md](docs/learn/33-load-testing.md) for why that phrase
+needed five definitions, and for the measured throughput on this hardware.
+
+Two database diagnostics live alongside it, for when the answer is "something is
+slow" and the next step is a measurement rather than a guess:
+
+```sh
+go test -tags loadtest -run 'TestInsertThroughput|TestCaptureChainThroughput' \
+  ./internal/store/ -v
+```
+
 ### The race detector
 
 `go test -race` needs cgo and therefore a C compiler, which Windows does not have by
@@ -185,5 +210,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [30 — Three flaky tests, and what each one actually was](docs/learn/30-diagnosing-flaky-tests.md)
 - [31 — Rate limiting: token buckets, and choosing what to count](docs/learn/31-rate-limiting.md)
 - [32 — Counters, gauges, histograms, and why p99](docs/learn/32-metrics.md)
+- [33 — Load testing, and what "dropped" actually means](docs/learn/33-load-testing.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

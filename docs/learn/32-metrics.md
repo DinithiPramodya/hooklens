@@ -109,7 +109,7 @@ answer is a *bounded* route label (the handful of registered patterns), not
 `ingest.Recorder` (`internal/ingest/ingest.go:517`) is three methods, declared in
 `ingest`, and `*metrics.App` happens to satisfy it. `tunnel.TunnelObserver` is two.
 Neither package imports `internal/metrics`. Same reasoning as `tunnel.AuthFunc` in
-[19](19-tunnel-server.md): the dependency arrow points at the small interface, the
+[18](18-websockets.md): the dependency arrow points at the small interface, the
 packages stay testable with a four-line fake, and there is no import cycle to
 untangle when metrics later needs to know about something in ingest.
 

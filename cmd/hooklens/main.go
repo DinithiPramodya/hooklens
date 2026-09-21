@@ -128,6 +128,9 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.S
 		if c, p := handler.EvictLimiters(); c+p > 0 {
 			log.Debug("evicted idle rate limiters", "create", c, "capture", p)
 		}
+		if n := handler.EvictTouched(); n > 0 {
+			log.Debug("forgot last-seen bookkeeping for idle inboxes", "inboxes", n)
+		}
 	})
 
 	srv := &http.Server{

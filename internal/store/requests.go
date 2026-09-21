@@ -364,3 +364,24 @@ func (s *Store) RecordForward(ctx context.Context, requestID string, out Forward
 	}
 	return nil
 }
+
+// CountRequests returns how many captures an inbox holds.
+//
+// Added for the load test, and deliberately not used by the API: `count(*)`
+// on a growing table is a sequential scan of every row matching the filter,
+// which is fine for one assertion at the end of a 60-second run and is not
+// fine on a page load. The UI's "how many" question is answered by cursor
+// pagination instead -- see docs/learn/09-pagination.md.
+//
+// It exists because the load test's real question is not "did the server
+// return 200" but "is the row there", and only the database can answer that.
+// A 2xx whose row never landed is the one failure mode in this system that
+// deserves to be called a dropped capture.
+func (s *Store) CountRequests(ctx context.Context, endpointID string) (int64, error) {
+	const q = `select count(*) from requests where endpoint_id = $1`
+	var n int64
+	if err := s.pool.QueryRow(ctx, q, endpointID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count requests: %w", err)
+	}
+	return n, nil
+}

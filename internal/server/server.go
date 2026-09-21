@@ -465,6 +465,17 @@ func (s *Server) EvictLimiters() (create, capture int) {
 	return s.createLimiter.Evict(idle), s.captureLimiter.Evict(idle)
 }
 
+// EvictTouched drops the ingest handler's last-seen bookkeeping for inboxes
+// that have gone quiet.
+//
+// Same sweeper tick, same reasoning as EvictLimiters, and the same
+// safety: forgetting an entry costs one extra UPDATE on the inbox's next
+// capture and nothing else.
+func (s *Server) EvictTouched() int {
+	const idle = 15 * time.Minute
+	return s.ingest.EvictTouched(idle)
+}
+
 // Rate-limit defaults, used when the config carries zero.
 //
 // These match the defaults in internal/config; duplicated deliberately so
