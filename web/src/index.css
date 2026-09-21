@@ -265,3 +265,77 @@ table.headers td { padding: 0.2rem 0.5rem 0.2rem 0; vertical-align: top; }
 .delivery.ok   { color: var(--ok);  background: color-mix(in srgb, var(--ok) 8%, transparent); }
 .delivery.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent); }
 .delivery.fail { color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
+
+/* ---- phase 4: signature, replay, diff ---- */
+
+.tiny { font-size: 0.78rem; }
+.captures li.cmp .rowbtn {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+}
+.rightpane { min-width: 0; }
+
+.sig {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+}
+.sig h3, .detail h3 {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--muted); margin: 0 0 0.5rem;
+}
+.sig form { gap: 0.5rem; }
+
+input.secret {
+  flex: 1 1 12rem;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+input.secret:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+textarea.editor {
+  width: 100%;
+  margin-top: 0.5rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  padding: 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  resize: vertical;
+}
+
+summary { cursor: pointer; font-size: 0.82rem; color: var(--muted); }
+summary:hover { color: var(--fg); }
+pre.sigstring {
+  margin: 0.5rem 0;
+  padding: 0.5rem;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border-radius: 4px;
+}
+
+.diffsec { margin-bottom: 1rem; }
+.diffsec h4 {
+  font-size: 0.75rem; margin: 0 0 0.35rem; font-weight: 600;
+}
+table.difftable { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+table.difftable td {
+  padding: 0.25rem 0.5rem 0.25rem 0;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.dpath { font-family: ui-monospace, monospace; color: var(--accent); white-space: nowrap; }
+.dop { color: var(--muted); font-size: 0.72rem; white-space: nowrap; }
+.dval { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.dval del { color: var(--err); text-decoration: line-through; }
+.dval ins { color: var(--ok); text-decoration: none; }
+.d-added .dop   { color: var(--ok); }
+.d-removed .dop { color: var(--err); }
+
+.toggle { display: block; margin-top: 0.75rem; cursor: pointer; }

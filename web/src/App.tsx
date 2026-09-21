@@ -3,6 +3,7 @@ import { createInbox, type CaptureSummary } from './lib/api'
 import { useLiveCaptures, useRequests, useStoredInbox } from './lib/useInbox'
 import { Detail } from './Detail'
 import { deliveryBadge, deliveryOf } from './lib/delivery'
+import { Diff } from './Diff'
 
 export default function App() {
   const { inbox, setInbox } = useStoredInbox()
@@ -14,6 +15,10 @@ export default function App() {
   // that the stream rewrites, and holding a copy of a row here would mean two
   // sources of truth for the same capture.
   const [selected, setSelected] = useState<string | null>(null)
+  // The second capture in a comparison. Separate from `selected` because a
+  // diff needs both and the first one is whatever is already open -- which
+  // is the interaction people expect from a file browser.
+  const [compareWith, setCompareWith] = useState<string | null>(null)
 
   async function onCreate() {
     setCreating(true)
@@ -99,6 +104,12 @@ export default function App() {
         {/* Said once, not on every row. "No tunnel" is the normal state of an
             inbox used for inspection, so repeating it per capture would paint
             a working system as broken. */}
+        {selected && !compareWith && requests.length > 1 && (
+          <p className="muted tiny">
+            shift-click another capture to compare it with this one
+          </p>
+        )}
+
         {noTunnel && (
           <p className="muted notice">
             captures are being stored but not forwarded — run{' '}
@@ -109,8 +120,27 @@ export default function App() {
         <div className="panes">
           <ul className="captures">
             {requests.map((r) => (
-              <li key={r.id} className={r.id === selected ? 'sel' : undefined}>
-                <button className="rowbtn" onClick={() => setSelected(r.id)}>
+              <li
+                key={r.id}
+                className={
+                  r.id === selected ? 'sel' : r.id === compareWith ? 'cmp' : undefined
+                }
+              >
+                <button
+                  className="rowbtn"
+                  onClick={(e) => {
+                    // Shift-click picks the second side of a comparison.
+                    // A modifier rather than a mode: selecting two things
+                    // is already a familiar gesture, and a "compare mode"
+                    // toggle would be one more piece of state to explain.
+                    if (e.shiftKey && selected && r.id !== selected) {
+                      setCompareWith(r.id)
+                      return
+                    }
+                    setCompareWith(null)
+                    setSelected(r.id)
+                  }}
+                >
                   <span className={`method m-${r.method.toLowerCase()}`}>{r.method}</span>
                   <span className="path">
                     {r.path}
@@ -134,7 +164,20 @@ export default function App() {
               expanded node in the tree would carry over onto an unrelated
               request, showing one capture's open branches over another's
               data. */}
-          {selected && inbox && <Detail key={selected} id={selected} inbox={inbox} />}
+          {selected && inbox && (
+            <div className="rightpane">
+              {compareWith ? (
+                <Diff
+                  left={selected}
+                  right={compareWith}
+                  inbox={inbox}
+                  onClose={() => setCompareWith(null)}
+                />
+              ) : (
+                <Detail key={selected} id={selected} inbox={inbox} />
+              )}
+            </div>
+          )}
         </div>
       </section>
 

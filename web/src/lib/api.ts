@@ -117,3 +117,105 @@ export const keys = {
   requests: (slug: string) => ['requests', slug] as const,
   request: (id: string) => ['request', id] as const,
 }
+
+// ---- Phase 4 actions ----
+
+export type VerifyResult = {
+  detected: boolean
+  provider?: string
+  valid?: boolean
+  signed_string?: string
+  expected?: string
+  provided?: string
+  problem?: string
+  hint?: string
+  timestamp?: string
+  age_seconds?: number
+}
+
+export type ReplayResult = {
+  replayed: boolean
+  edited: boolean
+  target: string
+  status?: number
+  body_b64?: string
+  headers?: Header[]
+  elapsed_ms?: number
+  error?: string
+  hint?: string
+  signature_note?: string
+}
+
+export type DiffChange = {
+  path: string
+  op: 'added' | 'removed' | 'changed'
+  old?: string
+  new?: string
+}
+
+export type DiffResult = {
+  left: string
+  right: string
+  request: DiffChange[] | null
+  headers: DiffChange[] | null
+  body: DiffChange[] | null
+  body_note?: string
+  identical: boolean
+  volatile_hidden: boolean
+  volatile_headers: string[]
+}
+
+/**
+ * Verify a capture's signature.
+ *
+ * The secret is a parameter and goes in the body, never the URL. A query
+ * string lands in access logs, proxy logs, browser history and the Referer
+ * of any outbound link -- see docs/learn/26-hmac.md.
+ */
+export function verifyRequest(id: string, token: string, secret: string): Promise<VerifyResult> {
+  return post<VerifyResult>(`/api/requests/${id}/verify`, token, { secret })
+}
+
+export function replayRequest(
+  id: string,
+  token: string,
+  opts: { target?: string; bodyB64?: string } = {},
+): Promise<ReplayResult> {
+  return post<ReplayResult>(`/api/requests/${id}/replay`, token, {
+    target: opts.target,
+    body_b64: opts.bodyB64,
+  })
+}
+
+export function diffRequests(
+  id: string,
+  withID: string,
+  token: string,
+  showVolatile = false,
+): Promise<DiffResult> {
+  const qs = new URLSearchParams({ with: withID })
+  if (showVolatile) qs.set('volatile', '1')
+  return get<DiffResult>(`/api/requests/${id}/diff?${qs}`, token)
+}
+
+async function post<T>(path: string, token: string, body: unknown): Promise<T> {
+  const resp = await fetch(path, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`
+    try {
+      const j = (await resp.json()) as { error?: string; hint?: string }
+      if (j.error) detail = j.hint ? `${j.error} — ${j.hint}` : j.error
+    } catch {
+      /* not JSON; keep the status */
+    }
+    throw new ApiError(resp.status, detail)
+  }
+  return (await resp.json()) as T
+}

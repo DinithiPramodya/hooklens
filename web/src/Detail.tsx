@@ -4,6 +4,8 @@ import { classifyBody, decodeBase64, formatBytes, hexDump } from './lib/body'
 import { useRequest } from './lib/useInbox'
 import { deliveryOf, formatMs } from './lib/delivery'
 import { JsonTree } from './JsonTree'
+import { Signature } from './Signature'
+import { Replay } from './Replay'
 
 type Tab = 'body' | 'headers' | 'raw'
 
@@ -62,6 +64,9 @@ export function Detail({ id, inbox }: { id: string; inbox: Inbox }) {
       {tab === 'body' && <Body b64={data.body_base64} />}
       {tab === 'headers' && <Headers headers={data.headers} />}
       {tab === 'raw' && <Raw req={data} />}
+
+      <Signature id={id} inbox={inbox} />
+      <Replay id={id} inbox={inbox} bodyB64={data.body_base64} />
     </div>
   )
 }
