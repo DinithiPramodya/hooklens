@@ -27,6 +27,13 @@ type StoredRequest struct {
 	DeclaredSize  *int64
 	SourceIP      *netip.Addr
 	ReceivedAt    time.Time
+
+	// The forwarding outcome, from migration 00006. All three are nil when
+	// forwarding has not been attempted -- which is every row for an inbox
+	// with no tunnel attached, and is a normal state rather than a failure.
+	ForwardStatus *int
+	ForwardError  *string
+	ForwardMS     *int
 }
 
 // headerJSON is the on-disk shape of one header inside the jsonb array.
@@ -101,7 +108,8 @@ const (
 const (
 	selectRequestCols = `
 		select id::text, endpoint_id::text, method, path, query, headers,
-		       body, body_size, body_truncated, declared_size, source_ip, received_at
+		       body, body_size, body_truncated, declared_size, source_ip, received_at,
+		       forward_status, forward_error, forward_ms
 		from requests
 		where endpoint_id = $1`
 
@@ -185,7 +193,8 @@ func (s *Store) ListRequests(ctx context.Context, endpointID string, limit int, 
 func (s *Store) GetRequest(ctx context.Context, id string) (*StoredRequest, error) {
 	const q = `
 		select id::text, endpoint_id::text, method, path, query, headers,
-		       body, body_size, body_truncated, declared_size, source_ip, received_at
+		       body, body_size, body_truncated, declared_size, source_ip, received_at,
+		       forward_status, forward_error, forward_ms
 		from requests
 		where id = $1`
 
@@ -210,6 +219,7 @@ func scanRequest(sc scanner) (*StoredRequest, error) {
 	err := sc.Scan(
 		&r.ID, &r.EndpointID, &r.Method, &r.Path, &r.Query, &headers,
 		&r.Body, &r.BodySize, &r.BodyTruncated, &r.DeclaredSize, &r.SourceIP, &r.ReceivedAt,
+		&r.ForwardStatus, &r.ForwardError, &r.ForwardMS,
 	)
 	if err != nil {
 		return nil, err
@@ -259,7 +269,7 @@ func scanRequestInto(sc scanner, r *StoredRequest, hash *[]byte) error {
 	err := sc.Scan(
 		&r.ID, &r.EndpointID, &r.Method, &r.Path, &r.Query, &headers,
 		&r.Body, &r.BodySize, &r.BodyTruncated, &r.DeclaredSize, &r.SourceIP,
-		&r.ReceivedAt, hash,
+		&r.ReceivedAt, &r.ForwardStatus, &r.ForwardError, &r.ForwardMS, hash,
 	)
 	if err != nil {
 		return err
@@ -310,6 +320,47 @@ func (s *Store) SetRetention(ctx context.Context, endpointID string, hours int) 
 	_, err := s.pool.Exec(ctx, q, endpointID, hours)
 	if err != nil {
 		return fmt.Errorf("set retention: %w", err)
+	}
+	return nil
+}
+
+// ForwardOutcome is what happened when a capture was handed to a tunnel.
+//
+// Exactly one of Status and Error is meaningful, mirroring the CHECK
+// constraint in migration 00006. The type makes that pairing explicit so
+// callers cannot set both without noticing.
+type ForwardOutcome struct {
+	// Status is the local app's HTTP status, when it was reached.
+	Status int
+	// Error is a short machine code: no_tunnel, timeout, disconnected,
+	// unreachable, protocol. Set only when the app was NOT reached.
+	Error string
+	// Elapsed is the round trip, in milliseconds.
+	Elapsed int
+}
+
+// RecordForward stores the result of a forwarding attempt.
+//
+// This is the one place the append-only rule from 00002 is bent: the row is
+// inserted before forwarding is attempted -- the durability line requires it
+// -- so the outcome can only be written afterwards. A single UPDATE touching
+// three columns on a row we just inserted, which is still in cache.
+func (s *Store) RecordForward(ctx context.Context, requestID string, out ForwardOutcome) error {
+	var status *int
+	if out.Status != 0 {
+		status = &out.Status
+	}
+	var errCode *string
+	if out.Error != "" {
+		errCode = &out.Error
+	}
+
+	const q = `
+		update requests
+		set forward_status = $2, forward_error = $3, forward_ms = $4
+		where id = $1`
+	if _, err := s.pool.Exec(ctx, q, requestID, status, errCode, out.Elapsed); err != nil {
+		return fmt.Errorf("record forward: %w", err)
 	}
 	return nil
 }

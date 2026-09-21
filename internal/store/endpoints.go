@@ -138,7 +138,8 @@ func (s *Store) AuthenticateRequest(ctx context.Context, requestID, token string
 	const q = `
 		select r.id::text, r.endpoint_id::text, r.method, r.path, r.query, r.headers,
 		       r.body, r.body_size, r.body_truncated, r.declared_size, r.source_ip,
-		       r.received_at, e.owner_token_hash
+		       r.received_at, r.forward_status, r.forward_error, r.forward_ms,
+		       e.owner_token_hash
 		from requests r
 		join endpoints e on e.id = r.endpoint_id
 		where r.id = $1`

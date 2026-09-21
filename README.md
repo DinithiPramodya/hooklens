@@ -9,7 +9,8 @@ running on your laptop. Replay, diff, and provider-signature verification on top
 > retention schedule. The frontend is compiled into the binary and shows captures arriving
 > live over SSE, with a detail pane that renders JSON as a collapsible tree, headers with
 > duplicates intact, raw text, or a hex dump for binary. The tunnel protocol now has an
-> authenticated WebSocket handshake; request forwarding is next.
+> authenticated WebSocket handshake, and captured webhooks are forwarded down it to a
+> connected client, whose response is relayed back to the provider. The CLI itself is next.
 > See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
@@ -144,5 +145,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [17 — NAT and firewalls: why the internet cannot reach your laptop](docs/learn/17-nat-and-firewalls.md)
 - [18 — WebSocket: an HTTP request that stops being HTTP](docs/learn/18-websockets.md)
 - [19 — Multiplexing and correlation: one connection, many requests](docs/learn/19-multiplexing-and-correlation.md)
+- [20 — Forwarding, and what the provider is told](docs/learn/20-forwarding.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

@@ -30,10 +30,13 @@ import (
 // the cost is that it will not survive being run as two replicas, because a
 // tunnel held by instance A cannot be reached from instance B.
 type Server struct {
-	cfg    config.Config
-	log    *slog.Logger
-	app    http.Handler
-	ingest http.Handler
+	cfg config.Config
+	log *slog.Logger
+	app http.Handler
+	// ingest is the concrete type, not http.Handler: the server owns its
+	// configuration (the forward deadline), and hiding it behind the interface
+	// would mean reaching it through a type assertion.
+	ingest *ingest.Handler
 	store  *store.Store
 	// broker fans captures out to open streams. Owned here rather than passed
 	// in, because its lifetime is exactly this Server's -- it holds no
@@ -63,10 +66,12 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.Sto
 		log:       log,
 		store:     st,
 		broker:    br,
-		ingest:    ingest.New(log, st, br, capture.DefaultMaxBody),
 		heartbeat: heartbeatInterval,
 	}
 
+	// The tunnel is built BEFORE ingest, because ingest forwards through its
+	// hub. Constructing ingest first and passing nil -- then hoping to set the
+	// field afterwards -- is how a handler ends up silently never forwarding.
 	s.tunnel = tunnel.New(ctx, log,
 		// The store's error is translated at the boundary rather than letting
 		// internal/tunnel import internal/store. That keeps the protocol
@@ -84,6 +89,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.Sto
 		func(slug string) string { return "http://" + slug + "." + cfg.BaseDomain + "/" },
 		tunnel.Options{},
 	)
+
+	s.ingest = ingest.New(log, st, br, s.tunnel.Hub(), capture.DefaultMaxBody)
 	s.app = s.appRoutes()
 
 	// The middleware chain is built once, at construction, not per request.

@@ -5,15 +5,18 @@ package ingest
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/DinithiPramodya/hooklens/internal/broker"
 	"github.com/DinithiPramodya/hooklens/internal/capture"
 	"github.com/DinithiPramodya/hooklens/internal/store"
+	"github.com/DinithiPramodya/hooklens/internal/tunnel"
 )
 
 // ReservedPrefix is the one path namespace this handler will not capture.
@@ -47,13 +50,34 @@ type Handler struct {
 	store   *store.Store
 	broker  *broker.Broker
 	maxBody int64
+	// fwd delivers captures to a connected tunnel. Nil is a supported state,
+	// not a missing dependency: hooklens is a working inspector with no
+	// tunnel feature at all, and that path must stay clean.
+	fwd Forwarder
+	// forwardTimeout bounds one round trip. A field rather than a constant
+	// purely so tests can drive it in milliseconds instead of waiting 30
+	// seconds per assertion -- the same reasoning as Server.heartbeat.
+	forwardTimeout time.Duration
 }
 
-func New(log *slog.Logger, st *store.Store, br *broker.Broker, maxBody int64) *Handler {
+func New(log *slog.Logger, st *store.Store, br *broker.Broker, fwd Forwarder, maxBody int64) *Handler {
 	if maxBody <= 0 {
 		maxBody = capture.DefaultMaxBody
 	}
-	return &Handler{log: log, store: st, broker: br, maxBody: maxBody}
+	return &Handler{
+		log: log, store: st, broker: br, fwd: fwd, maxBody: maxBody,
+		forwardTimeout: defaultForwardTimeout,
+	}
+}
+
+// SetForwardTimeout overrides the round-trip deadline.
+//
+// Must be called before the handler serves anything: it is a plain field
+// write with no lock, which is safe only while nothing is reading it.
+func (h *Handler) SetForwardTimeout(d time.Duration) {
+	if d > 0 {
+		h.forwardTimeout = d
+	}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +183,43 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 		"truncated", req.Truncated,
 	)
 
+	// Forwarding. Still below the durability line, so nothing here may turn a
+	// stored capture into a non-2xx -- forward() returns a decision, never an
+	// error.
+	fo := h.forward(ctx, ep.ID, req)
+
+	if fo.out != (store.ForwardOutcome{}) {
+		// Recorded on its own context. ctx may already be cancelled -- the
+		// provider hung up during a slow forward -- and writing the outcome is
+		// the only durable evidence of what happened.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		if err := h.store.RecordForward(rctx, id, fo.out); err != nil {
+			h.log.Warn("record forward failed", "inbox", slug, "id", id, "err", err)
+		}
+		cancel()
+	}
+
+	if fo.resp != nil && fo.resp.Error == "" {
+		// The developer's app answered. Relay it verbatim -- that is the whole
+		// point of the tunnel.
+		h.log.Info("forwarded", "id", id, "inbox", slug,
+			"status", fo.resp.Status, "ms", fo.out.Elapsed)
+		writeForwarded(w, fo.resp)
+		return
+	}
+
+	// Either there is no tunnel, or delivery failed. The provider gets a
+	// success either way, because the capture IS stored and a non-2xx would
+	// make it retry an event we already hold. The header says what happened
+	// for anyone looking; the UI reads the recorded code.
+	if fo.out.Error != "" {
+		h.log.Info("forward failed", "id", id, "inbox", slug,
+			"reason", fo.out.Error, "ms", fo.out.Elapsed)
+		w.Header().Set("X-Hooklens-Forward", fo.out.Error)
+	} else {
+		w.Header().Set("X-Hooklens-Forward", "captured")
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"captured":   true,
 		"id":         id,
@@ -205,4 +266,154 @@ func (h *Handler) publish(endpointID, requestID string, req *capture.Request) {
 	}
 
 	h.broker.Publish(endpointID, broker.Message{Event: "capture", Data: string(payload)})
+}
+
+// Forwarder hands a captured request to a connected tunnel.
+//
+// An interface declared here, in the consumer, rather than internal/ingest
+// importing internal/tunnel's concrete Hub. Same reasoning as AuthFunc in the
+// other direction: ingest does not need to know that tunnels are WebSockets,
+// and this keeps the dependency one-way and the tests free of sockets.
+type Forwarder interface {
+	Forward(ctx context.Context, endpointID string, req tunnel.Request) (*tunnel.Response, error)
+}
+
+// defaultForwardTimeout bounds one round trip to the developer's machine.
+//
+// Chosen to sit under the shortest common provider timeout (Stripe and GitHub
+// both give around 10s before they call a delivery failed, but several give
+// 30s), so in the normal case WE give up first and answer deliberately rather
+// than having the provider hang up on us mid-forward and retry.
+const defaultForwardTimeout = 30 * time.Second
+
+// forwardOutcome is the decision made about one attempt: what to tell the
+// provider, and what to record on the capture.
+type forwardOutcome struct {
+	resp *tunnel.Response
+	out  store.ForwardOutcome
+}
+
+// forward attempts delivery and reports what happened.
+//
+// It is BELOW the durability line and therefore cannot fail in a way the
+// caller could turn into a non-2xx. Every error path here becomes a recorded
+// code, never a returned error.
+func (h *Handler) forward(ctx context.Context, endpointID string, req *capture.Request) forwardOutcome {
+	if h.fwd == nil {
+		return forwardOutcome{}
+	}
+
+	// A fresh context, deliberately NOT derived from the request's.
+	//
+	// r.Context() is cancelled the moment the provider hangs up -- and a
+	// provider whose own timeout is shorter than ours does exactly that. If
+	// the forward were tied to it, the developer's app would have its request
+	// cancelled mid-handler, which looks to them like their own code
+	// misbehaving. Finishing the delivery and recording the outcome is the
+	// honest thing; nobody is waiting for the response, but the capture's
+	// record of what happened is still worth having.
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), h.forwardTimeout)
+	defer cancel()
+
+	start := time.Now()
+	resp, err := h.fwd.Forward(fctx, endpointID, tunnel.Request{
+		Method:  req.Method,
+		Path:    req.Path,
+		Query:   req.Query,
+		Headers: toTunnelHeaders(req.Headers),
+		BodyB64: base64.StdEncoding.EncodeToString(req.Body),
+	})
+	elapsed := int(time.Since(start).Milliseconds())
+
+	if err != nil {
+		return forwardOutcome{out: store.ForwardOutcome{
+			Error:   forwardErrorCode(err),
+			Elapsed: elapsed,
+		}}
+	}
+
+	// The CLI reached us but could not reach the local app. Distinct from a
+	// 5xx: the app was never asked. Reporting this as an application error
+	// would tell a developer their handler is broken when it is not running.
+	if resp.Error != "" {
+		return forwardOutcome{resp: resp, out: store.ForwardOutcome{
+			Error:   "unreachable",
+			Elapsed: elapsed,
+		}}
+	}
+
+	return forwardOutcome{resp: resp, out: store.ForwardOutcome{
+		Status:  resp.Status,
+		Elapsed: elapsed,
+	}}
+}
+
+// forwardErrorCode maps a hub error to the short code stored in the database.
+//
+// The CHECK constraint in migration 00006 lists the permitted values, so an
+// unmapped error must fall back to one of them rather than to the error's own
+// text -- otherwise a new error type anywhere upstream turns into a constraint
+// violation on the UPDATE, which would be logged as a database fault far from
+// its actual cause.
+func forwardErrorCode(err error) string {
+	switch {
+	case errors.Is(err, tunnel.ErrNoTunnel):
+		return "no_tunnel"
+	case errors.Is(err, tunnel.ErrTimeout):
+		return "timeout"
+	case errors.Is(err, tunnel.ErrDisconnected):
+		return "disconnected"
+	default:
+		return "protocol"
+	}
+}
+
+func toTunnelHeaders(hs []capture.Header) []tunnel.Header {
+	out := make([]tunnel.Header, len(hs))
+	for i, h := range hs {
+		out[i] = tunnel.Header{Name: h.Name, Value: h.Value}
+	}
+	return out
+}
+
+// writeForwarded relays the local app's response to the provider.
+//
+// Status, headers and body come from the developer's application, which is the
+// entire point: they must be able to test what their handler actually returns.
+func writeForwarded(w http.ResponseWriter, resp *tunnel.Response) {
+	body, err := base64.StdEncoding.DecodeString(resp.BodyB64)
+	if err != nil {
+		// A malformed body from our own CLI. Relay the status anyway rather
+		// than inventing a failure: the status is the part a provider acts on.
+		body = nil
+	}
+	for _, hdr := range resp.Headers {
+		// Hop-by-hop headers describe the CLI's connection to the local app,
+		// not ours to the provider. Relaying them would advertise a transfer
+		// encoding or a keep-alive that does not apply to this response.
+		if isHopByHop(hdr.Name) {
+			continue
+		}
+		w.Header().Add(hdr.Name, hdr.Value)
+	}
+	w.Header().Set("X-Hooklens-Forward", "delivered")
+	status := resp.Status
+	if status < 100 || status > 599 {
+		// A CLI that sent nonsense must not make us panic in WriteHeader.
+		status = http.StatusBadGateway
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+// isHopByHop reports whether a header applies to a single transport hop and
+// must not be forwarded. RFC 9110 section 7.6.1, plus Content-Length, which
+// net/http computes for the response it is actually writing.
+func isHopByHop(name string) bool {
+	switch strings.ToLower(name) {
+	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+		"te", "trailer", "transfer-encoding", "upgrade", "content-length":
+		return true
+	}
+	return false
 }
