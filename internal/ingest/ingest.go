@@ -62,6 +62,8 @@ type Handler struct {
 	// limiter caps captures per inbox. Nil means unlimited, which keeps
 	// every test that does not care about limiting free of setup.
 	limiter Limiter
+	// rec records metrics. Nil is fine, for the same reason as the others.
+	rec Recorder
 }
 
 func New(log *slog.Logger, st *store.Store, br *broker.Broker, fwd Forwarder, maxBody int64) *Handler {
@@ -145,6 +147,9 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 		if ok, retry := h.limiter.Allow(ep.ID); !ok {
 			h.log.Warn("capture rate limited", "inbox", slug, "retry_after", retry)
 			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(retry.Seconds()+0.999))))
+			if h.rec != nil {
+				h.rec.CaptureRejected("rate_limited")
+			}
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{
 				"error": "rate limit exceeded for this inbox",
 				"hint":  "Raise HOOKLENS_RATE_CAPTURE if this is legitimate traffic.",
@@ -172,6 +177,10 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 		// Nothing was stored, so asking the provider to retry is honest.
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "temporarily unavailable"})
 		return
+	}
+
+	if h.rec != nil {
+		h.rec.CaptureStored(len(req.Body))
 	}
 
 	// ---- the request is durable from here on ----
@@ -211,6 +220,16 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 	// stored capture into a non-2xx -- forward() returns a decision, never an
 	// error.
 	fo := h.forward(ctx, ep.ID, req)
+
+	if h.rec != nil && fo.out != (store.ForwardOutcome{}) {
+		// The same outcome vocabulary the database stores, deliberately, so
+		// a dashboard and a SQL query cannot disagree about what happened.
+		outcome := fo.out.Error
+		if outcome == "" {
+			outcome = "delivered"
+		}
+		h.rec.Forwarded(outcome, float64(fo.out.Elapsed)/1000)
+	}
 
 	if fo.out != (store.ForwardOutcome{}) {
 		// Recorded on its own context. ctx may already be cancelled -- the
@@ -489,3 +508,17 @@ type Limiter interface {
 // Same contract as the other setters: called before the handler serves
 // anything, because it is a plain field write with no lock.
 func (h *Handler) SetLimiter(l Limiter) { h.limiter = l }
+
+// Recorder is the metrics surface ingest needs.
+//
+// An interface declared here, like Forwarder and Limiter. internal/ingest
+// records three things and should not import a package that knows about
+// histograms and exposition formats to do it.
+type Recorder interface {
+	CaptureStored(bytes int)
+	CaptureRejected(reason string)
+	Forwarded(outcome string, seconds float64)
+}
+
+// SetRecorder installs a metrics recorder. Before serving, no lock.
+func (h *Handler) SetRecorder(r Recorder) { h.rec = r }

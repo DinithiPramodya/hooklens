@@ -108,6 +108,7 @@ last, after the domain question was settled.*
 | | Note | Covers |
 |---|---|---|
 | 31 | [Rate limiting](31-rate-limiting.md) | Fixed window vs sliding log vs token bucket · lazy refill · per-IP vs per-inbox and what each defends against · why `X-Forwarded-For` is a configuration question |
+| 32 | [Metrics](32-metrics.md) | Counters vs gauges vs histograms · the Prometheus text format, written by hand · cumulative buckets and the `+Inf` slot · why p99 and not the mean · cardinality, and why a path label kills a scraper |
 
 **Quiz:** pending — written at the end of the phase.
 

@@ -38,7 +38,7 @@ func TestResponseControllerReachesThroughMiddleware(t *testing.T) {
 	// reads, is the happens-before edge that makes the handoff legal.
 	done := make(chan struct{})
 
-	h := withRecover(quiet(), withRequestLog(quiet(), http.HandlerFunc(
+	h := withRecover(quiet(), withRequestLog(quiet(), nil, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			defer close(done)
 			rc := http.NewResponseController(w)
@@ -87,7 +87,7 @@ func sseTestServer(t *testing.T, h http.Handler) *httptest.Server {
 // TestSSEWireFormat pins the format itself against a bare handler, with no
 // database in the way.
 func TestSSEWireFormat(t *testing.T) {
-	h := withRequestLog(quiet(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := withRequestLog(quiet(), nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sse, err := newSSEWriter(w)
 		if err != nil {
 			t.Errorf("newSSEWriter: %v", err)
@@ -135,7 +135,7 @@ func TestSSEWireFormat(t *testing.T) {
 func TestSSEFlushesBeforeHandlerReturns(t *testing.T) {
 	release := make(chan struct{})
 
-	h := withRequestLog(quiet(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := withRequestLog(quiet(), nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sse, err := newSSEWriter(w)
 		if err != nil {
 			t.Errorf("newSSEWriter: %v", err)
@@ -178,7 +178,7 @@ func TestSSEFlushesBeforeHandlerReturns(t *testing.T) {
 // The server is given a WriteTimeout shorter than the test, which without the
 // per-connection deadline clear would cut the stream mid-flight.
 func TestSSESurvivesWriteTimeout(t *testing.T) {
-	h := withRequestLog(quiet(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := withRequestLog(quiet(), nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sse, err := newSSEWriter(w)
 		if err != nil {
 			t.Errorf("newSSEWriter: %v", err)

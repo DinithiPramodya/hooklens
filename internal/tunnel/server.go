@@ -104,6 +104,9 @@ type Server struct {
 	// Hub(), so ingest can forward a request without knowing this package has
 	// sockets in it at all.
 	hub *Hub
+
+	// observer counts connections for metrics. Nil is fine.
+	observer TunnelObserver
 }
 
 // Options carries the tunables. Zero values mean "use the default", so a
@@ -212,6 +215,16 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 		// replaced, found by a test that got ErrTimeout where it expected a
 		// response.
 		go s.closeWith(old.conn, CodeReplaced, "another client connected for this inbox")
+	}
+
+	if s.observer != nil {
+		s.observer.TunnelOpened()
+		// Deferred immediately after the increment, so the gauge cannot
+		// drift: every path out of this function decrements exactly once,
+		// including a panic. Decrementing manually before each return is
+		// how a gauge slowly becomes fiction -- and a gauge nobody trusts
+		// is worse than no gauge.
+		defer s.observer.TunnelClosed()
 	}
 
 	log.Info("tunnel connected")
@@ -478,3 +491,15 @@ func isNormalClose(err error) bool {
 	status := websocket.CloseStatus(err)
 	return status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway
 }
+
+// TunnelObserver is told when a tunnel connects and disconnects.
+//
+// Declared here, in the consumer, like AuthFunc. internal/tunnel records
+// two events and should not import a metrics package to do it.
+type TunnelObserver interface {
+	TunnelOpened()
+	TunnelClosed()
+}
+
+// SetObserver installs a connection observer. Before serving, no lock.
+func (s *Server) SetObserver(o TunnelObserver) { s.observer = o }

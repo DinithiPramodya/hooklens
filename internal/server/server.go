@@ -17,6 +17,7 @@ import (
 	"github.com/DinithiPramodya/hooklens/internal/broker"
 	"github.com/DinithiPramodya/hooklens/internal/config"
 	"github.com/DinithiPramodya/hooklens/internal/ingest"
+	"github.com/DinithiPramodya/hooklens/internal/metrics"
 	"github.com/DinithiPramodya/hooklens/internal/ratelimit"
 	"github.com/DinithiPramodya/hooklens/internal/replay"
 	"github.com/DinithiPramodya/hooklens/internal/store"
@@ -64,6 +65,11 @@ type Server struct {
 	// replayClient refuses private and link-local destinations. Built once:
 	// it holds a connection pool, and a per-request client would discard it.
 	replayClient *http.Client
+	// metrics is the process's published state. Held here rather than in a
+	// package global: globals make a counter reachable from anywhere,
+	// which means two servers in one test process share it, and they hide
+	// which components actually observe what.
+	metrics *metrics.App
 }
 
 // New builds the root handler.
@@ -81,6 +87,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.Sto
 		store:     st,
 		broker:    br,
 		heartbeat: heartbeatInterval,
+		metrics:   metrics.NewApp(),
 	}
 
 	// The tunnel is built BEFORE ingest, because ingest forwards through its
@@ -127,12 +134,13 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.Sto
 	s.replayClient = replay.SafeClient(replayTimeout)
 	s.ingest = ingest.New(log, st, br, s.tunnel.Hub(), cfg.MaxBody)
 	s.ingest.SetLimiter(s.captureLimiter)
+	s.ingest.SetRecorder(s.metrics)
 	s.app = s.appRoutes()
 
 	// The middleware chain is built once, at construction, not per request.
 	// Outermost first: withRecover wraps withRequestLog so a panic is still
 	// logged as a completed request with a 500, rather than escaping the logger.
-	s.handler = withRecover(log, withRequestLog(log, http.HandlerFunc(s.route)))
+	s.handler = withRecover(log, withRequestLog(log, s.metrics, http.HandlerFunc(s.route)))
 
 	return s
 }
@@ -181,6 +189,13 @@ func (s *Server) appRoutes() http.Handler {
 	// "GET /healthz" is a Go 1.22 routing pattern. The method is part of the
 	// pattern, so a POST to /healthz gets 405 from the mux itself.
 	mux.HandleFunc("GET /healthz", s.handleHealth)
+
+	// /metrics publishes traffic volumes and error rates, which is an
+	// information leak on a public interface. The standard answers are a
+	// second listener on a private address or an ingress rule; neither is
+	// built here, so this is recorded as a deliberate deferral rather than
+	// an oversight -- see docs/learn/32-metrics.md.
+	mux.Handle("GET /metrics", s.metrics.Handler())
 
 	// Reads require the inbox owner token in an Authorization header (unit 08).
 	// Creation is deliberately open: there is nobody to authenticate yet, and an
@@ -465,3 +480,6 @@ const (
 	// until something is genuinely wrong.
 	defaultRateCapture = 50
 )
+
+// Metrics exposes the registry so other components can record into it.
+func (s *Server) Metrics() *metrics.App { return s.metrics }

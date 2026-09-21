@@ -322,6 +322,17 @@ func TestPingKeepsConnectionAlive(t *testing.T) {
 // TestShutdownClosesTunnels is why the tunnel holds a process-lifetime context
 // instead of the request's: http.Server.Shutdown does not wait for, or even
 // know about, hijacked connections.
+//
+// The reader is parked BEFORE cancel(), which is not decoration. The server
+// writes the close frame and then gives the closing handshake one second
+// (closeGrace) before hard-closing. A test that calls cancel() and only then
+// starts reading is racing that second: if this goroutine is descheduled --
+// which a full-suite run on a loaded machine does do -- the socket is torn
+// down before the frame is consumed and Read returns a bare EOF. Seen once,
+// in a full `go test ./...`, never in fourteen isolated runs. A real CLI is
+// always sitting in its read loop, so this was the harness diverging from
+// production, not the server misbehaving; the race is removed here rather
+// than papered over with a retry.
 func TestShutdownClosesTunnels(t *testing.T) {
 	_, srv, cancel := newTestServer(t, Options{})
 	c := dial(t, srv)
@@ -330,9 +341,47 @@ func TestShutdownClosesTunnels(t *testing.T) {
 		t.Fatalf("got %q, want hello_ok", env.Type)
 	}
 
+	type result struct {
+		data []byte
+		err  error
+	}
+	got := make(chan result, 1)
+	reading := make(chan struct{})
+	go func() {
+		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		close(reading)
+		_, data, err := c.Read(ctx)
+		got <- result{data, err}
+	}()
+	<-reading // the goroutine has started; the Read call is imminent
+
 	cancel() // the process is stopping
 
-	cl := expectClose(t, c, CodeServerShutdown)
+	var r result
+	select {
+	case r = <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no frame and no error within 10s of shutdown")
+	}
+	if r.err != nil {
+		t.Fatalf("read after shutdown: %v", r.err)
+	}
+
+	env, err := DecodeEnvelope(r.data)
+	if err != nil {
+		t.Fatalf("decode frame: %v", err)
+	}
+	if env.Type != TypeClose {
+		t.Fatalf("got frame type %q, want %q", env.Type, TypeClose)
+	}
+	var cl Close
+	if err := DecodePayload(env, &cl); err != nil {
+		t.Fatalf("decode close: %v", err)
+	}
+	if cl.Code != CodeServerShutdown {
+		t.Fatalf("close code = %q, want %q", cl.Code, CodeServerShutdown)
+	}
 	if !strings.Contains(strings.ToLower(cl.Reason), "shutting down") {
 		t.Errorf("reason %q does not say the server is shutting down", cl.Reason)
 	}

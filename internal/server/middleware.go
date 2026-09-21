@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/DinithiPramodya/hooklens/internal/metrics"
 )
 
 // requestIDHeader is echoed on every response so a user reporting "request
@@ -60,7 +62,7 @@ func (rec *statusRecorder) Write(b []byte) (int, error) {
 }
 
 // withRequestLog assigns a request ID and logs one line per completed request.
-func withRequestLog(log *slog.Logger, next http.Handler) http.Handler {
+func withRequestLog(log *slog.Logger, m *metrics.App, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
@@ -75,6 +77,13 @@ func withRequestLog(log *slog.Logger, next http.Handler) http.Handler {
 		status := rec.status
 		if status == 0 {
 			status = http.StatusOK
+		}
+
+		// Metrics before the log line. Both are cheap, but the metric is
+		// the one something alerts on, and a logger blocking on a full pipe
+		// should not also cost the counter.
+		if m != nil {
+			m.ObserveHTTP(r.Method, status, time.Since(start))
 		}
 
 		log.Info("request",
