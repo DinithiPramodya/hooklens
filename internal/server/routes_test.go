@@ -22,6 +22,7 @@ import (
 func testServer(t *testing.T) *Server {
 	t.Helper()
 	return New(
+		t.Context(),
 		config.Config{Env: "dev", Addr: ":0", BaseDomain: "localhost"},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,

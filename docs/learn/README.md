@@ -59,8 +59,21 @@ last, after the domain question was settled.*
 
 ---
 
+## Phase 3 — The tunnel
+
+*In progress. This is the deep one: the concepts here are the ones the whole project is
+built to demonstrate.*
+
+| | Note | Covers |
+|---|---|---|
+| 17 | [NAT and firewalls](17-nat-and-firewalls.md) | Why the internet cannot reach your laptop · translation rows are created by outbound packets · connection tracking and why rows expire · what the dev machine actually shows |
+| 18 | [WebSocket](18-websockets.md) | An HTTP request that stops being HTTP · the `Upgrade` handshake and frames · why not SSE here · a cancelled read context closes the connection |
+
+**Quiz:** pending — written at the end of the phase.
+
+---
+
 ## Still to come
 
-- **Phase 3 — the tunnel:** NAT, WebSocket upgrade, multiplexing and correlation, goroutine leaks, backpressure
 - **Phase 4 — the wedge features:** hash functions, HMAC, timing attacks, replay windows, structural diff
 - **Phase 5 — hardening:** rate limiting, metrics, load testing, testcontainers, distribution

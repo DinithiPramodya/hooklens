@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"github.com/DinithiPramodya/hooklens/internal/config"
 	"github.com/DinithiPramodya/hooklens/internal/ingest"
 	"github.com/DinithiPramodya/hooklens/internal/store"
+	"github.com/DinithiPramodya/hooklens/internal/tunnel"
 	"github.com/DinithiPramodya/hooklens/internal/webui"
 )
 
@@ -42,9 +44,19 @@ type Server struct {
 	// milliseconds instead of waiting 20 seconds per assertion.
 	heartbeat time.Duration
 	handler   http.Handler
+	// tunnel serves the CLI's WebSocket. Its lifetime is the process, not a
+	// request: see the comment on its baseCtx.
+	tunnel *tunnel.Server
 }
 
-func New(cfg config.Config, log *slog.Logger, st *store.Store) *Server {
+// New builds the root handler.
+//
+// ctx is the process lifetime -- the signal context from main -- and is
+// separate from any request's context. It exists for the tunnel: a WebSocket
+// is a hijacked connection, which http.Server.Shutdown neither waits for nor
+// knows about, so the only way to tell a tunnel that the process is stopping
+// is to cancel a context that outlives every individual request.
+func New(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.Store) *Server {
 	br := broker.New()
 	s := &Server{
 		cfg:       cfg,
@@ -54,6 +66,24 @@ func New(cfg config.Config, log *slog.Logger, st *store.Store) *Server {
 		ingest:    ingest.New(log, st, br, capture.DefaultMaxBody),
 		heartbeat: heartbeatInterval,
 	}
+
+	s.tunnel = tunnel.New(ctx, log,
+		// The store's error is translated at the boundary rather than letting
+		// internal/tunnel import internal/store. That keeps the protocol
+		// package free of any opinion about how endpoints are persisted.
+		func(ctx context.Context, slug, token string) (string, error) {
+			ep, err := st.AuthenticateEndpoint(ctx, slug, token)
+			switch {
+			case errors.Is(err, store.ErrUnauthorized):
+				return "", tunnel.ErrUnauthorized
+			case err != nil:
+				return "", err
+			}
+			return ep.ID, nil
+		},
+		func(slug string) string { return "http://" + slug + "." + cfg.BaseDomain + "/" },
+		tunnel.Options{},
+	)
 	s.app = s.appRoutes()
 
 	// The middleware chain is built once, at construction, not per request.
@@ -116,6 +146,10 @@ func (s *Server) appRoutes() http.Handler {
 	mux.HandleFunc("GET /api/endpoints/{slug}/requests", s.handleListRequests)
 	mux.HandleFunc("GET /api/requests/{id}", s.handleGetRequest)
 	mux.HandleFunc("GET /api/endpoints/{slug}/stream", s.handleStream)
+
+	// The tunnel. One connection per CLI, authenticated by its first frame
+	// rather than by a header -- see docs/learn/18-websockets.md.
+	mux.HandleFunc("GET /api/tunnel", s.tunnel.Handle)
 
 	// Catch-all for the API namespace, and it is not optional.
 	//

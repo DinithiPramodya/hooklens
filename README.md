@@ -4,11 +4,12 @@ A webhook inspector with a self-hosted tunnel. It gives you a public URL, captur
 request sent to it byte-for-byte, streams them to a web UI, and forwards them to code
 running on your laptop. Replay, diff, and provider-signature verification on top.
 
-> **Status: Phase 2 of 6 complete — the inspector works.** Requests are captured, stored
+> **Status: Phase 3 of 6 in progress — the tunnel is being built.** Requests are captured, stored
 > byte-for-byte, authenticated with per-inbox tokens, paginated by cursor, and expired on a
 > retention schedule. The frontend is compiled into the binary and shows captures arriving
 > live over SSE, with a detail pane that renders JSON as a collapsible tree, headers with
-> duplicates intact, raw text, or a hex dump for binary. The tunnel is Phase 3.
+> duplicates intact, raw text, or a hex dump for binary. The tunnel protocol now has an
+> authenticated WebSocket handshake; request forwarding is next.
 > See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
@@ -140,5 +141,7 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [14 — In-process pub/sub: fan-out, slow consumers, backpressure](docs/learn/14-pubsub.md)
 - [15 — Server state, and TanStack Query's cache model](docs/learn/15-server-state.md)
 - [16 — Recursive rendering: the JSON tree and the detail pane](docs/learn/16-recursive-rendering.md)
+- [17 — NAT and firewalls: why the internet cannot reach your laptop](docs/learn/17-nat-and-firewalls.md)
+- [18 — WebSocket: an HTTP request that stops being HTTP](docs/learn/18-websockets.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

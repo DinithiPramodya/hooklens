@@ -108,7 +108,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.S
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: server.New(cfg, log, st),
+		Handler: server.New(ctx, cfg, log, st),
 
 		// ReadHeaderTimeout, not ReadTimeout. ReadTimeout caps the time to read
 		// headers AND body, and a legitimate provider on a slow link may take a

@@ -3,6 +3,7 @@ module github.com/DinithiPramodya/hooklens
 go 1.25.7
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pressly/goose/v3 v3.27.3
 )

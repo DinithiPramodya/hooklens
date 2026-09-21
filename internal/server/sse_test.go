@@ -239,7 +239,7 @@ func storeServer(t *testing.T, heartbeat time.Duration) (*Server, *store.NewEndp
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
 
-	s := New(config.Config{Env: "dev", Addr: ":0", BaseDomain: "localhost"}, quiet(), st)
+	s := New(context.Background(), config.Config{Env: "dev", Addr: ":0", BaseDomain: "localhost"}, quiet(), st)
 	if heartbeat > 0 {
 		s.heartbeat = heartbeat
 	}
