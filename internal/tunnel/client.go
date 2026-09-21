@@ -182,7 +182,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	// Response bodies from the local app go OUT, but request bodies come IN,
 	// so the read limit has to accommodate a capture plus base64 expansion --
 	// matching the server's own limit.
-	conn.SetReadLimit(responseReadLimit)
+	conn.SetReadLimit(maxFrameBytes)
 
 	ack, err := c.handshake(ctx, conn)
 	if err != nil {
@@ -405,11 +405,25 @@ func (c *Client) callLocal(ctx context.Context, req Request) Response {
 	}
 	defer hresp.Body.Close()
 
-	// Bounded, for the same reason every read in this codebase is bounded.
-	// A local app streaming forever would otherwise consume the laptop.
-	respBody, err := io.ReadAll(io.LimitReader(hresp.Body, responseReadLimit))
+	// Bounded, for the same reason every read in this codebase is bounded --
+	// but bounded at the BODY limit, not the frame limit. Reading up to the
+	// frame limit and then base64-encoding it produces a frame a third larger
+	// than the peer will accept, and a read-limit violation closes the
+	// connection rather than skipping the message.
+	//
+	// The +1 is the probe from unit 06: LimitReader reports EOF at its limit,
+	// so asking for one extra byte is the only way to tell "exactly at the
+	// limit" from "over it".
+	respBody, err := io.ReadAll(io.LimitReader(hresp.Body, maxBodyBytes+1))
 	if err != nil {
 		return Response{Error: "reading local response: " + err.Error()}
+	}
+	if int64(len(respBody)) > maxBodyBytes {
+		// Refused, not truncated. A truncated response relayed to the provider
+		// is a corrupt payload that looks complete -- and the developer would
+		// be debugging their own handler, which did nothing wrong.
+		return Response{Error: fmt.Sprintf(
+			"local response is larger than the %d byte relay limit", maxBodyBytes)}
 	}
 
 	out := Response{

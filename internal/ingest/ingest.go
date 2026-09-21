@@ -303,6 +303,21 @@ func (h *Handler) forward(ctx context.Context, endpointID string, req *capture.R
 		return forwardOutcome{}
 	}
 
+	// A truncated capture is NOT forwarded.
+	//
+	// The obvious behaviour -- send what we kept -- delivers a corrupt payload
+	// that looks complete. A JSON parser then fails in a way that blames the
+	// sender, and a signature verifier fails in a way that blames the secret;
+	// neither points at truncation, because nothing says truncation happened.
+	// Refusing is worse for exactly one case (a handler that tolerates partial
+	// bodies) and better for every other.
+	//
+	// Nothing is lost for inspection: the capture is stored, visible in the
+	// UI, and flagged. The escape hatch is raising HOOKLENS_MAX_BODY.
+	if req.Truncated {
+		return forwardOutcome{out: store.ForwardOutcome{Error: "too_large"}}
+	}
+
 	// A fresh context, deliberately NOT derived from the request's.
 	//
 	// r.Context() is cancelled the moment the provider hangs up -- and a
@@ -418,4 +433,14 @@ func isHopByHop(name string) bool {
 		return true
 	}
 	return false
+}
+
+// SetMaxBody overrides the capture body cap.
+//
+// Same contract as SetForwardTimeout: called before the handler serves
+// anything, because it is a plain field write with no lock.
+func (h *Handler) SetMaxBody(n int64) {
+	if n > 0 {
+		h.maxBody = n
+	}
 }

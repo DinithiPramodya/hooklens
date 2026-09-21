@@ -21,7 +21,7 @@ func TestForwardErrorCodeCoversEveryHubError(t *testing.T) {
 	// The codes the CHECK constraint allows.
 	allowed := map[string]bool{
 		"no_tunnel": true, "timeout": true, "disconnected": true,
-		"unreachable": true, "protocol": true, "overloaded": true,
+		"unreachable": true, "protocol": true, "overloaded": true, "too_large": true,
 	}
 
 	cases := []struct {

@@ -39,11 +39,26 @@ const (
 	// once we know who is on the other end and response bodies start arriving.
 	handshakeReadLimit = 4 << 10
 
-	// After the handshake, responses carry bodies. Bounded at the ingest cap
-	// plus room for base64 expansion and the surrounding JSON -- generous, but
-	// finite, because an unbounded read is the vulnerability from unit 06 in a
-	// different costume.
-	responseReadLimit = 2 << 20
+	// maxBodyBytes is the largest body either direction will carry, matching
+	// capture.DefaultMaxBody. Not imported from there: internal/tunnel is
+	// deliberately free of the capture package, and the two being equal is a
+	// fact asserted by a test rather than a dependency.
+	maxBodyBytes = 1 << 20
+
+	// maxFrameBytes is the WebSocket read limit, and it is DELIBERATELY NOT
+	// maxBodyBytes.
+	//
+	// A body travels base64-encoded, which is four bytes for every three, so
+	// a body at the limit is already 1.33x over it before the JSON envelope
+	// and the headers are added. Setting these two equal is not a conservative
+	// choice, it is a bug: a read-limit violation does not skip a message, it
+	// CLOSES THE CONNECTION -- so one large response would drop the tunnel and
+	// every unrelated request in flight on it, reporting a read limit rather
+	// than the response that caused it.
+	//
+	// The slack covers the headers (bounded separately at the HTTP server) and
+	// the surrounding JSON.
+	maxFrameBytes = maxBodyBytes/3*4 + 256<<10
 )
 
 // ErrUnauthorized is what an AuthFunc returns for a bad slug or token. It is
@@ -164,7 +179,7 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 	// deliberately tiny limit has to go up now that the peer is known. Still
 	// bounded: the same cap ingest applies on the way in, plus room for
 	// base64's 4/3 expansion and the surrounding JSON.
-	c.SetReadLimit(responseReadLimit)
+	c.SetReadLimit(maxFrameBytes)
 
 	cl := newClient(c, log)
 	// close() before unregister(), and both deferred here so they run however

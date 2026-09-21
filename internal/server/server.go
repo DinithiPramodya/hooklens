@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/DinithiPramodya/hooklens/internal/broker"
-	"github.com/DinithiPramodya/hooklens/internal/capture"
 	"github.com/DinithiPramodya/hooklens/internal/config"
 	"github.com/DinithiPramodya/hooklens/internal/ingest"
 	"github.com/DinithiPramodya/hooklens/internal/store"
@@ -90,7 +89,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.Sto
 		tunnel.Options{},
 	)
 
-	s.ingest = ingest.New(log, st, br, s.tunnel.Hub(), capture.DefaultMaxBody)
+	s.ingest = ingest.New(log, st, br, s.tunnel.Hub(), cfg.MaxBody)
 	s.app = s.appRoutes()
 
 	// The middleware chain is built once, at construction, not per request.

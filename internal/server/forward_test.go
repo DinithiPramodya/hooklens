@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -313,4 +314,51 @@ func fetchRequest(t *testing.T, s *Server, id string) *store.StoredRequest {
 		t.Fatalf("GetRequest: %v", err)
 	}
 	return req
+}
+
+// TestTruncatedCaptureIsNotForwarded is failure mode 8 at the tunnel
+// boundary. The capture is stored with what fits, but handing a local app
+// bytes that are corrupt yet look complete is worse than handing it nothing:
+// the resulting parse or signature failure blames the sender, not the
+// truncation.
+func TestTruncatedCaptureIsNotForwarded(t *testing.T) {
+	s, ep := storeServer(t, 0)
+	// A tiny cap, so a modest body is over it.
+	s.ingest.SetMaxBody(64)
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+
+	var reached atomic.Bool
+	fakeTunnel(t, srv.URL, ep.Slug, ep.Token, func(tunnel.Request) tunnel.Response {
+		reached.Store(true)
+		return tunnel.Response{Status: 200}
+	})
+	waitTunnel(t, s, ep.ID)
+
+	resp := post(t, srv, ep.Slug, "/big", strings.Repeat("x", 4096))
+	defer resp.Body.Close()
+
+	// The provider still gets a success: the capture IS stored.
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 -- the capture was stored", resp.StatusCode)
+	}
+	if h := resp.Header.Get("X-Hooklens-Forward"); h != "too_large" {
+		t.Errorf("X-Hooklens-Forward = %q, want too_large", h)
+	}
+	if reached.Load() {
+		t.Error("a truncated body was forwarded to the local app")
+	}
+
+	req := fetchRequest(t, s, capturedID(t, resp))
+	if !req.BodyTruncated {
+		t.Error("the capture is not marked truncated")
+	}
+	if req.ForwardError == nil || *req.ForwardError != "too_large" {
+		t.Errorf("forward_error = %v, want too_large", req.ForwardError)
+	}
+	// And what was kept is inspectable, which is why refusing to forward
+	// costs nothing for debugging.
+	if req.BodySize != 64 {
+		t.Errorf("stored %d bytes, want the 64 that fit", req.BodySize)
+	}
 }

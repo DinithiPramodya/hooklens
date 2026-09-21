@@ -128,6 +128,13 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.S
 		// Slowloris attack, and this is the line that closes it.
 		ReadHeaderTimeout: 10 * time.Second,
 
+		// Bounded explicitly rather than inheriting Go's 1MB default. Headers
+		// travel inside a tunnel frame alongside a base64 body, and the frame
+		// limit has to cover both -- a megabyte of headers would blow past it
+		// and close the connection. 64KB is far more than any real webhook
+		// sends and keeps the arithmetic in internal/tunnel honest.
+		MaxHeaderBytes: 64 << 10,
+
 		// A response we cannot write in 30s is not going to get better.
 		WriteTimeout: 30 * time.Second,
 

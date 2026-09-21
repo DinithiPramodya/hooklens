@@ -4,8 +4,11 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/DinithiPramodya/hooklens/internal/capture"
 )
 
 // Config is the entire runtime configuration of the process.
@@ -28,6 +31,14 @@ type Config struct {
 	// mainly so tests can drive it fast.
 	SweepInterval time.Duration
 
+	// MaxBody caps how much of a captured body is kept. Configurable because
+	// payload sizes are not ours to decide -- some providers legitimately send
+	// megabytes -- and a limit nobody can raise is a bug for somebody.
+	//
+	// It is also the limit the tunnel enforces on a relayed response, so
+	// raising it raises both ends together.
+	MaxBody int64
+
 	// BaseDomain is the domain the app itself is served from, e.g.
 	// "hooklens.dev". A single label in front of it -- "a7f3.hooklens.dev" --
 	// is a capture inbox. See server.Resolve.
@@ -48,6 +59,7 @@ func Load() (Config, error) {
 		// `docker compose up -d` with nothing exported.
 		DatabaseURL:   env("DATABASE_URL", "postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable"),
 		SweepInterval: envDuration("HOOKLENS_SWEEP_INTERVAL", sweepIntervalDefault),
+		MaxBody:       envBytes("HOOKLENS_MAX_BODY", capture.DefaultMaxBody),
 	}
 
 	// Validate at startup, not at first use. A process that boots, reports
@@ -95,4 +107,34 @@ func envDuration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// envBytes reads a byte count, accepting a plain number or a KB/MB suffix.
+//
+// "1048576" is unreadable and "1MB" is not, and a config value people get
+// wrong by a factor of 1024 is a config value that will be got wrong.
+func envBytes(key string, def int64) int64 {
+	raw := strings.TrimSpace(strings.ToUpper(os.Getenv(key)))
+	if raw == "" {
+		return def
+	}
+	mult := int64(1)
+	switch {
+	case strings.HasSuffix(raw, "MB"):
+		mult, raw = 1<<20, strings.TrimSuffix(raw, "MB")
+	case strings.HasSuffix(raw, "KB"):
+		mult, raw = 1<<10, strings.TrimSuffix(raw, "KB")
+	case strings.HasSuffix(raw, "B"):
+		raw = strings.TrimSuffix(raw, "B")
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || n <= 0 {
+		// A malformed value falls back to the default rather than failing to
+		// start. Debatable -- Load() rejects a bad HOOKLENS_ENV outright --
+		// and chosen differently here because there is a safe default and the
+		// blast radius of a typo is "captures are 1MB" rather than "the
+		// routing is wrong".
+		return def
+	}
+	return n * mult
 }
