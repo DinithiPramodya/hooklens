@@ -103,7 +103,11 @@ last, after the domain question was settled.*
 
 ## Phase 5 — Hardening and release
 
-*In progress.*
+*Two of these units were written because a measurement demanded them. 33 set out to
+verify a throughput target and instead found that a `last_seen_at` column was costing
+the pipeline 2.5x; 34 exists because 33's diagnosis named the next thing to remove.
+The phase went 280 → 860 req/s without adding anything — both fixes deleted a
+database round trip.*
 
 | | Note | Covers |
 |---|---|---|
@@ -113,9 +117,21 @@ last, after the domain question was settled.*
 | 34 | [Caching and invalidation](34-caching-and-invalidation.md) | TTL vs explicit invalidation vs eviction · caching negatives · the stampede · why refusing admission beats LRU under a scan · never caching an authorisation decision |
 | 35 | [Release and distribution](35-release-and-distribution.md) | Cross-compilation without a toolchain per target · why `CGO_ENABLED` defaults differently on different machines · reproducible builds · what a Homebrew tap actually is · checksums as the security boundary |
 
-**Quiz:** pending — written at the end of the phase.
+**Quiz:** [Phase 5](../QUIZ.md) — 16 questions.
 
 ---
 
 ## Still to come
 
+
+**Phase 6 — Launch.** The README as a product page, the demo, `DECISIONS.md`
+(written by hand, from memory, per `CLAUDE.md`), and dogfooding: pointing real
+repository webhooks at a running instance and leaving it there.
+
+Two things block the first public release, both recorded in
+[35](35-release-and-distribution.md) and neither decidable here:
+
+- **No licence.** The repository declares none, which legally means all rights
+  reserved — nobody who installs it may use it. This is the author's call.
+- **The tap and bucket do not exist.** `homebrew-tap` and `scoop-bucket` are
+  separate GitHub repositories, each needing a PAT in this repository's secrets.

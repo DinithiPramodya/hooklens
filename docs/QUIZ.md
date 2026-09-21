@@ -15,6 +15,7 @@ without looking, then check.
 | 2 — The inspector UI | [11](learn/11-spa-and-go-embed.md) · [12](learn/12-cors.md) · [13](learn/13-server-sent-events.md) · [14](learn/14-pubsub.md) · [15](learn/15-server-state.md) · [16](learn/16-recursive-rendering.md) | [below](#phase-2--the-inspector-ui) |
 | 3 — The tunnel | [17](learn/17-nat-and-firewalls.md) · [18](learn/18-websockets.md) · [19](learn/19-multiplexing-and-correlation.md) · [20](learn/20-forwarding.md) · [21](learn/21-the-cli.md) · [22](learn/22-backoff-and-jitter.md) · [23](learn/23-bounded-concurrency.md) · [24](learn/24-size-limits.md) · [25](learn/25-showing-delivery.md) | below |
 | 4 — The wedge features | [26](learn/26-hmac.md) · [27](learn/27-replay-and-ssrf.md) · [28](learn/28-structural-diff.md) · [29](learn/29-mutations-and-secrets.md) · [30](learn/30-diagnosing-flaky-tests.md) | below |
+| 5 — Hardening and release | [31](learn/31-rate-limiting.md) · [32](learn/32-metrics.md) · [33](learn/33-load-testing.md) · [34](learn/34-caching-and-invalidation.md) · [35](learn/35-release-and-distribution.md) | below |
 
 ---
 
@@ -1703,3 +1704,341 @@ microseconds; a dead one costs a second.
 The general shape is worth keeping: **"make the teardown fast" and "make the teardown
 informative" are in tension**, and choosing speed without noticing the cost is easy — it
 was an over-application of an earlier, correct fix.
+
+---
+
+# Phase 5 — hardening and release
+
+*Set 2026-09-22. Material: notes [31](learn/31-rate-limiting.md) through
+[35](learn/35-release-and-distribution.md).*
+
+> **These are model answers, not recall.** Cover them, answer cold, compare.
+
+---
+
+## Q1. Your capture endpoint rate-limits per inbox. Where in the handler does the check go, and what breaks if you move it three lines later — after the body read and the insert?
+
+Above the durability line, and above the body read.
+
+Two separate reasons, and they fail differently.
+
+**Above the insert** is a correctness requirement. A 429 returned *after* storing means
+the provider sees a failure for a webhook you are holding, retries it, and you store it
+twice. That is the Phase 0 Q1 bug wearing a rate limiter: once you have committed, every
+remaining code path must be incapable of producing a non-2xx.
+
+**Above the body read** is a resource argument. A refused request should not first cost
+you up to a megabyte of read from a sender you have already decided to reject — otherwise
+the limiter caps database writes while leaving bandwidth and memory uncapped, which is
+most of what an attacker wanted.
+
+The check needs the endpoint id as its key, so it cannot go above the inbox lookup. That
+pins it to exactly one place: after resolution, before the read.
+
+---
+
+## Q2. Why per-inbox and per-IP rather than one global limit, and what does each actually defend against?
+
+They defend against different adversaries and neither substitutes for the other.
+
+**Per-IP on inbox creation** stops one client minting thousands of inboxes — a storage and
+namespace exhaustion attack. The key is the IP because there is no account yet; that is
+the only identity available at that point.
+
+**Per-inbox on captures** stops one noisy inbox consuming the capacity of every other. The
+key is the endpoint id, not the IP, because legitimate webhook traffic for one inbox
+arrives from a provider's whole fleet of source addresses — an IP-keyed capture limit
+would either be so loose it does nothing or would throttle Stripe's second delivery node
+because the first used the budget.
+
+A single global limit would do neither: it cannot tell a busy legitimate inbox from an
+attack, so tuning it either lets the attack through or takes the service down for
+everybody during a legitimate burst. **The key you choose is the statement about who you
+are protecting from whom.**
+
+---
+
+## Q3. A histogram's `+Inf` bucket. Do you increment it on every observation? Show your reasoning.
+
+No — exactly one bucket slot is incremented per observation: the first one the value fits,
+or `+Inf` if it fits none.
+
+The trap is that the *exposed* buckets are cumulative — `le="0.5"` must report everything
+at or below 0.5, which includes everything in the smaller buckets — and `+Inf` must equal
+the total count. It is tempting to conclude that every observation "belongs to" `+Inf` and
+increment it too.
+
+It does belong there, but the cumulative value is produced **at render time** by summing
+the stored counts as the renderer walks the buckets in order. So storage must be
+*non-cumulative*. Incrementing both a bucket and `+Inf` counts every observation twice in
+the total.
+
+This shipped wrong: a test expecting 4 got 7. The general lesson is that when a value is
+derived at render time, the storage format and the render are two halves of one decision
+and cannot be reviewed separately.
+
+---
+
+## Q4. You start a fresh server and scrape `/metrics`. `hooklens_tunnels_connected` is nowhere in the output. Is that a bug? What are the consequences?
+
+Yes, and it is a subtle one. A metric with no observations emits **no line at all** — the
+series does not exist until something touches it.
+
+Two consequences, both bad, and both in the place you will not be looking.
+
+A dashboard panel shows "no data", which is **visually identical to the exporter being
+down**. You cannot tell "nothing is connected" from "the process is dead".
+
+Worse, an alert on `hooklens_tunnels_connected == 0` **never fires**, because the series
+does not exist to be zero. The alert you wrote for exactly this situation is silent during
+exactly this situation.
+
+The fix is to zero-initialise the series you know exist at construction. You cannot do it
+for all of them — label values like `outcome="too_large"` are only known when they happen
+— so it covers the always-meaningful ones and the rest appear on first use.
+
+Note how this was found: every unit test passed. They exercised the metrics they observed,
+and could not catch a series nothing had observed. Scraping a running binary found it in
+ten seconds.
+
+---
+
+## Q5. Why label HTTP metrics by status *class* and not status code? And why never by path?
+
+**Class over code** is a cost/benefit judgement. Per-status is roughly sixty series per
+method and answers no question the class does not: "are we erroring" is 5xx, "are clients
+misbehaving" is 4xx. The exact code is in the log line, which is where per-event detail
+belongs.
+
+**Never by path** is a different kind of statement — it is a hard rule, not a trade.
+A path label is *unbounded*: the label value comes from the request, so every URL a
+stranger invents creates a new time series, forever. And the memory is spent in the
+**scraper**, not in your process, so you take down the monitoring for everything else in
+the estate and the damage lands somewhere you are not watching.
+
+If you genuinely need per-endpoint breakdown, the answer is a **bounded route label** —
+the handful of registered mux patterns, with anything unmatched collapsed to `other` —
+never `r.URL.Path`.
+
+---
+
+## Q6. What is coordinated omission, and how does a load generator avoid it?
+
+The obvious load generator sends a request, waits for the response, and sends the next. It
+therefore offers whatever rate the server is willing to accept: when the server slows down,
+the generator slows down with it.
+
+The consequence is perverse. The requests that *would have been slow* are the ones that
+were never sent, so they never appear in the latency numbers — **the worse the server
+behaves, the better the measurements look**, and a server that can do 600/s under a 1,000/s
+offered load reports a 100% success rate and a comfortable p99.
+
+The fix is an **open loop**: requests are scheduled against a clock fixed before the run
+starts, so request *i* is due at `start + i*interval` regardless of what happened to
+request *i-1*. Latency is measured from that due time, not from when a worker picked the
+job up — to the sender, waiting for a free worker and waiting for a slow server are the
+same wait.
+
+And when every worker is busy, the scheduler must **not block**. Blocking on the queue
+re-couples it to the server and reintroduces the whole problem at the last possible moment.
+It records the undispatched request and keeps its clock.
+
+---
+
+## Q7. "Zero dropped captures." Enumerate what that could mean, and say which one is the bug.
+
+Five distinct things, and only one is a defect:
+
+1. **Connection refused or reset before HTTP began.** The server never saw it, so no
+   server-side metric can know about it. Only the client can count these.
+2. **A 429 from the rate limiter.** Not a drop — that is the limiter working as designed.
+3. **A 5xx.** The server saw the request and failed it. A bug, of a different kind.
+4. **A 2xx whose row never reached Postgres.** *This* is the dropped capture the phrase is
+   about: the server promised durability and did not deliver.
+5. **A capture stored but not broadcast to a slow SSE consumer.** Deliberate backpressure
+   — dropping a live update to protect the process is a design decision.
+
+Plus a sixth that belongs to the *measurement*: requests the generator could not dispatch
+because its own workers were busy. Calling those server drops is a lie about which side ran
+out of capacity.
+
+A load test that collapses these into one number cannot tell you which one you have.
+
+---
+
+## Q8. How do you test #4 — that every acknowledged capture is durable? Why is the metric not good enough?
+
+You count the rows in Postgres before and after the run and assert the difference equals
+the number of 2xx the generator received.
+
+The metric is the wrong oracle because of *where it is incremented*: in the handler, after
+the insert returns. It reports **what the handler believed happened**. The failure mode
+being tested is precisely the one where the handler's belief and the database disagree — so
+asking the handler is circular reasoning.
+
+The right structure is three independent accounts — the client's 2xx count, the server's
+metric, the database's row count — printed side by side. Any two agreeing is reassuring;
+**disagreement is the finding**, and you cannot detect it with fewer than two sources.
+
+---
+
+## Q9. Your pipeline tops out at 280 req/s. Postgres benchmarks at 2,000 inserts/s on the same box. Where do you look, and what do you do *before* looking?
+
+Before looking: **measure, do not reason**. The three candidates are the HTTP layer, the
+connection pool, and the database, and picking one by intuition is how an afternoon gets
+spent optimising something that was not the problem.
+
+The measurement that separates them is to drive the database work directly, step by step:
+lookup alone, lookup+insert, +the forward-outcome write, +the last-seen update. Each step's
+cost is then the difference between two lines rather than a guess.
+
+Here that produced 299 captures/s for the full chain against 280 observed — close enough to
+say the database work *is* the ceiling and the HTTP layer is innocent — and showed the last
+step, `TouchEndpoint`, costing more than the other three combined.
+
+The cause: every capture for an inbox runs `update endpoints set last_seen_at = ... where
+id = $1` on **the same row**. Postgres takes a row lock per update, so they serialise.
+Inserts go to different rows and do not. A column nobody reads more than once a minute was
+the bottleneck.
+
+The fix is to coalesce: one write per inbox per minute, tracked in a map. 280 → 690 req/s
+from *deleting* a write.
+
+---
+
+## Q10. You cache inbox lookups with a TTL. Why is it safe to cache the slug→inbox resolution but not the token check?
+
+Because a capture URL is public by design — the slug is the capability, and resolving it
+grants nothing. Its unguessability is the security property, and a cache does not make it
+more guessable.
+
+The token check is an **authorisation decision**, and caching one means revocation stops
+being immediate: a revoked token stays valid for up to one TTL. "We revoke tokens, on a
+five-second delay, usually" is not a property worth trading for a database round trip on a
+path nobody hammers.
+
+The general rule: **a cache turns a correctness problem into a timing problem.** That is an
+excellent trade for a display value and a terrible one for a security decision, and the
+question to ask of any cache is which of the two you just did.
+
+---
+
+## Q11. Should a cache store negative results? Argue both sides, then decide for this system.
+
+**For:** without it, lookups that miss bypass the cache entirely. Someone enumerating
+subdomains generates exclusively misses, so the traffic you *least* want served from
+Postgres is precisely the traffic that skips the cache.
+
+**Against:** a cached "does not exist" is the one entry whose staleness a user meets
+head-on — create a thing, immediately use it, get a 404 from a copy of the past.
+
+For hooklens: cache them, at a shorter TTL (one second against five). The against-case
+cannot actually occur, because slugs are 128 bits of randomness and nobody POSTs to one
+before it exists. One second is short enough that I do not have to be certain of that
+reasoning.
+
+**This decision inverts if slugs ever become user-chosen.** Then "claim `stripe-test`, POST
+to it" is a real sequence and a cached 404 is a real bug.
+
+And separately: a transient error is **never** cached. Negative caching means "this does
+not exist", never "this failed" — caching a database timeout turns a blip into seconds of
+guaranteed failure, and the retry that would have succeeded never reaches the database to
+find out.
+
+---
+
+## Q12. Your cache is full. LRU, or refuse to admit the new entry? This is not the textbook answer.
+
+Refuse admission — the opposite of LRU, for a reason that is about the adversary rather
+than the access pattern.
+
+The realistic way this map fills is somebody enumerating subdomains. Under LRU, **every
+garbage key evicts a real inbox**: the attacker turns the cache off for everyone else,
+using nothing but requests they were going to send anyway, and gets no benefit from the
+cache themselves either way. It is a free denial-of-service against your own optimisation.
+
+Refusing admission means established inboxes keep their entries and the scan degrades to
+exactly the pre-cache behaviour — the correct worst case. It is not a permanent freeze,
+because entries expire within seconds and `put` clears expired ones before giving up, so
+the population still turns over.
+
+LRU is right when the working set legitimately exceeds the cap and adaptiveness is the
+point. It is wrong when an adversary controls the keys.
+
+---
+
+## Q13. The same `go build` command produces a binary that runs everywhere on one machine and fails on a colleague's Linux box on another. What happened?
+
+`CGO_ENABLED` was not set explicitly. It defaults to **1 when a C compiler is present and 0
+when it is not** — so the linking mode is a property of whoever ran the build.
+
+With cgo enabled, `net` and `os/user` use the system resolver and link against the host's
+libc. The binary then carries a dynamic dependency on that libc version and refuses to
+start on any system with an older one, with an error about `GLIBC_2.xx not found` that says
+nothing about the actual cause.
+
+`CGO_ENABLED=0` forces the pure-Go implementations and produces a genuinely static binary.
+The reason to put it in the release config rather than trust the default is that the
+failure appears **on the user's machine, not on yours** — the worst possible place for a
+build decision to surface.
+
+---
+
+## Q14. What is a Homebrew tap, mechanically? And why does `GITHUB_TOKEN` not work for publishing to one?
+
+A tap is just a **GitHub repository named `homebrew-<something>`** containing Ruby formula
+files. `brew install user/tap/hooklens` resolves by convention to
+`github.com/user/homebrew-tap` and reads `Formula/hooklens.rb`. Scoop's buckets are the
+same idea in JSON.
+
+Critically, **the tap does not host your binary.** The formula is an index: a URL per
+platform and a SHA-256. That makes the checksum the security boundary of the whole
+distribution story — it is the only thing between the index and a substituted download.
+
+`GITHUB_TOKEN` fails because it is scoped to the repository whose workflow is running. It
+cannot write to a different repository, so you need a PAT. The reason this catches people
+is the **shape of the failure**: the release publishes perfectly, every artifact uploads,
+the workflow goes green, and the formula silently never updates. Users keep installing the
+old version.
+
+---
+
+## Q15. Why does `-trimpath` matter for a release, and why must the version be injected with `-ldflags -X`?
+
+A binary cannot read the git tag it was built from — nothing puts it there. `-X
+main.version=v1.2.3` writes it into a package variable at link time; the variable defaults
+to `"dev"`, which is the correct answer for a build from a working tree.
+
+`-trimpath` strips the local module path and build directory, which would otherwise embed
+`C:\Users\Dinithi\...` in every path in the binary. Together with a fixed `mod_timestamp`
+from the commit, it makes two builds of the same commit on different machines produce the
+same bytes.
+
+That is not tidiness. **Reproducibility is what lets anyone verify that the published
+artifact corresponds to the published source** — which is the entire value of the checksum
+the formula is verifying. A checksum over a non-reproducible build only proves the file was
+not altered in transit, not that it is the software you read.
+
+---
+
+## Q16. Same question as Q4, generalised: three of this phase's bugs were invisible to a green test suite. What is the pattern, and what do you do about it?
+
+The pattern: **a test can only observe what it thinks to observe.**
+
+- The absent gauge — every metrics test passed, because each exercised the series it
+  observed. None could catch a series that nothing had touched.
+- The `last_seen_at` bottleneck — every functional test passed, because correctness was
+  never in question. Nothing exercised a thousand writes to one row.
+- The CLI's verbose dial errors and Windows console mojibake (unit 21) — no test asserts on
+  what output *looks like* to a human.
+
+All three were found the same way: **running the actual program and looking at it.** A
+scrape of a live binary, a load test, a terminal.
+
+What to do about it: keep a category of check that is not a unit test. Scrape the running
+server. Run the load generator. Start the CLI and read what it prints. And when one of
+these does find something, write the unit test *afterwards* — as a regression test, since
+the one thing now known is that the property was not being observed.
+
+The corollary is a habit rather than a technique: when a suite is green, ask what it is
+green *about*. The metrics suite was green about the metrics it named.
