@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/DinithiPramodya/hooklens/internal/tunnel"
 )
@@ -188,6 +189,10 @@ func runForward(ctx context.Context, args []string) error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
+	// Tracks whether this is the first connection, so a reconnect prints one
+	// line instead of repeating the whole banner every time the Wi-Fi blinks.
+	connected := false
+
 	client, err := tunnel.NewClient(tunnel.ClientOptions{
 		ServerURL: key,
 		Slug:      inbox.Slug,
@@ -195,10 +200,29 @@ func runForward(ctx context.Context, args []string) error {
 		Target:    *to,
 		Log:       log,
 		OnConnect: func(publicURL string) {
+			if connected {
+				fmt.Printf("  reconnected - same URL\n")
+				return
+			}
+			connected = true
 			fmt.Printf("\n  forwarding  %s  ->  %s\n", publicURL, *to)
 			fmt.Printf("  inbox       %s\n", inbox.Slug)
 			fmt.Printf("  inspect     %s/\n\n", key)
 			fmt.Printf("  ctrl-c to stop\n\n")
+		},
+		OnDisconnect: func(err error, retryIn time.Duration) {
+			// Printed rather than logged: this is the one thing the user must
+			// see, because a tunnel that is down while the terminal looks
+			// normal is how webhooks get silently missed.
+			// tunnel.ShortError, not the raw error. Go's dial failures are
+			// four nested clauses and only the last is actionable; the full
+			// text stays in the log at -v.
+			//
+			// ASCII only, deliberately: an em-dash here renders as mojibake
+			// in a Windows console that is not on a UTF-8 code page, and this
+			// is the line a user reads when something has gone wrong.
+			fmt.Printf("  disconnected: %s - retrying in %v\n",
+				tunnel.ShortError(err), retryIn.Round(100*time.Millisecond))
 		},
 	})
 	if err != nil {

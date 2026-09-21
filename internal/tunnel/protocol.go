@@ -138,6 +138,42 @@ const (
 	CodeServerShutdown = "server_shutdown"
 )
 
+// CloseError is a close frame received by a client, as a Go error.
+//
+// A typed error rather than a formatted string because the caller has to make
+// a decision on it: a rejected token will never start working, so retrying it
+// is a busy-wait that also looks like a credential attack. Reason is carried
+// verbatim so the CLI can print the server's own sentence.
+type CloseError struct {
+	Code   string
+	Reason string
+}
+
+func (e *CloseError) Error() string {
+	if e.Reason != "" {
+		return e.Reason
+	}
+	return "connection closed: " + e.Code
+}
+
+// Permanent reports whether retrying could ever succeed.
+//
+// The listed codes describe the CLIENT being wrong, and nothing about waiting
+// changes that. Everything else -- shutdown, replacement, a malformed frame,
+// a dropped socket -- is either transient or fixed by reconnecting, so the
+// default is to retry. Getting this backwards in either direction is
+// expensive: retry a permanent failure and you have a hot loop against an
+// auth endpoint, treat a transient one as permanent and the tool gives up on
+// a server that was restarting.
+func (e *CloseError) Permanent() bool {
+	switch e.Code {
+	case CodeUnauthorized, CodeVersion:
+		return true
+	default:
+		return false
+	}
+}
+
 // Encode marshals a frame into an envelope ready to write as one WebSocket
 // message.
 func Encode(t Type, payload any) ([]byte, error) {

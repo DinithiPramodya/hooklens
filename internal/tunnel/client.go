@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,10 +35,14 @@ type ClientOptions struct {
 	// scheme or path prefix is needed.
 	Target string
 	Log    *slog.Logger
-	// OnConnect is called once with the public URL, after the handshake
-	// succeeds. A callback rather than a return value so the CLI can print
-	// the banner the moment it is true, not after Run returns.
+	// OnConnect is called with the public URL each time the handshake
+	// succeeds -- including after a reconnect, so the CLI can say it is back.
+	// A callback rather than a return value so the banner appears the moment
+	// it is true, not after Run returns.
 	OnConnect func(publicURL string)
+	// OnDisconnect is called when a connection ends and another attempt is
+	// coming, with the reason and how long until the retry.
+	OnDisconnect func(err error, retryIn time.Duration)
 }
 
 // Client is one CLI session against one inbox.
@@ -110,9 +115,52 @@ func parseTarget(s string) (*url.URL, error) {
 	return u, nil
 }
 
-// Run connects and serves frames until ctx is cancelled or the connection
-// ends. It returns nil for an orderly shutdown.
+// Run keeps a tunnel up until ctx is cancelled.
+//
+// It reconnects on failure with exponential backoff and full jitter (failure
+// mode 6), reusing the same slug, so the public URL survives a network flap
+// without the CLI being restarted. It returns nil for an orderly shutdown and
+// an error only when retrying cannot help.
 func (c *Client) Run(ctx context.Context) error {
+	bo := newBackoff()
+
+	for {
+		start := time.Now()
+		err := c.connectOnce(ctx)
+		session := time.Since(start)
+
+		if ctx.Err() != nil {
+			return nil // interrupted; not a failure
+		}
+
+		// A connection that lasted counts as success, whatever ended it.
+		// Resetting on connect instead would let a server that accepts and
+		// instantly drops produce a tight loop of "successful" attempts --
+		// see the note on stableSession.
+		if session >= stableSession {
+			bo.reset()
+		}
+
+		var ce *CloseError
+		if errors.As(err, &ce) && ce.Permanent() {
+			// The client is wrong and waiting will not change that.
+			return err
+		}
+
+		delay := bo.next()
+		if c.opt.OnDisconnect != nil {
+			c.opt.OnDisconnect(err, delay)
+		}
+		c.log.Info("reconnecting", "after", delay.Round(time.Millisecond), "err", err)
+
+		if !sleep(ctx, delay) {
+			return nil // cancelled during the wait
+		}
+	}
+}
+
+// connectOnce dials, handshakes, and serves until the connection ends.
+func (c *Client) connectOnce(ctx context.Context) error {
 	wsURL, err := websocketURL(c.opt.ServerURL)
 	if err != nil {
 		return err
@@ -180,9 +228,9 @@ func (c *Client) handshake(ctx context.Context, conn *websocket.Conn) (*HelloOK,
 		// what to do.
 		var cl Close
 		if err := DecodePayload(env, &cl); err != nil {
-			return nil, fmt.Errorf("rejected by server (%s)", env.Type)
+			return nil, &CloseError{Code: "unknown", Reason: "rejected by server"}
 		}
-		return nil, fmt.Errorf("%s", cl.Reason)
+		return nil, &CloseError{Code: cl.Code, Reason: cl.Reason}
 
 	default:
 		return nil, fmt.Errorf("unexpected %s frame during handshake", env.Type)
@@ -226,10 +274,10 @@ func (c *Client) serve(ctx context.Context, conn *websocket.Conn) error {
 
 		case TypeClose:
 			var cl Close
-			if err := DecodePayload(env, &cl); err == nil && cl.Reason != "" {
-				return fmt.Errorf("server closed the tunnel: %s", cl.Reason)
+			if err := DecodePayload(env, &cl); err == nil {
+				return &CloseError{Code: cl.Code, Reason: cl.Reason}
 			}
-			return fmt.Errorf("server closed the tunnel")
+			return &CloseError{Code: "unknown", Reason: "server closed the tunnel"}
 
 		default:
 			c.log.Warn("unexpected frame type from server", "type", env.Type)
@@ -315,7 +363,7 @@ func (c *Client) callLocal(ctx context.Context, req Request) Response {
 		// "unreachable" and still answers the provider with a 2xx, so a local
 		// app that is simply not running does not make a provider disable the
 		// endpoint.
-		return Response{Error: cleanDialError(err)}
+		return Response{Error: ShortError(err)}
 	}
 	defer hresp.Body.Close()
 
@@ -341,13 +389,16 @@ func (c *Client) callLocal(ctx context.Context, req Request) Response {
 	return out
 }
 
-// cleanDialError turns Go's layered error text into one line a developer can
+// ShortError turns Go's layered error text into one line a developer can
 // act on.
 //
 // "Get \"http://localhost:3000/hook\": dial tcp 127.0.0.1:3000: connect:
 // connection refused" is accurate and nobody reads past the first clause. The
 // actionable part is the last one.
-func cleanDialError(err error) string {
+func ShortError(err error) string {
+	if err == nil {
+		return ""
+	}
 	msg := err.Error()
 	if i := strings.LastIndex(msg, ": "); i >= 0 && i+2 < len(msg) {
 		last := msg[i+2:]

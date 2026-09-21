@@ -31,10 +31,32 @@ func quiet() *slog.Logger {
 // database: AuthFunc is declared in this package, so nothing here depends on
 // how endpoints are actually stored.
 func testAuth(ctx context.Context, slug, token string) (string, error) {
-	if slug == goodSlug && token == goodToken {
+	if token != goodToken {
+		return "", ErrUnauthorized
+	}
+	if slug == goodSlug {
 		return goodID, nil
 	}
+	// Any "inbox-*" slug is valid and maps to its own endpoint id, so a test
+	// that leaves a client reconnecting cannot displace the next test's
+	// connection. That is not hypothetical: sharing one slug made
+	// TestShutdownClosesTunnels fail only in a full-package run, because a
+	// leftover client registered for the same inbox and evicted it -- failure
+	// mode 5 behaving exactly as designed, against the test suite.
+	if strings.HasPrefix(slug, "inbox-") {
+		return "ep-" + slug, nil
+	}
 	return "", ErrUnauthorized
+}
+
+// uniqueInbox gives a test its own slug and endpoint id.
+func uniqueInbox(t *testing.T) (slug, endpointID string) {
+	t.Helper()
+	// Test names can contain characters a slug would not; only uniqueness
+	// matters here.
+	safe := strings.NewReplacer("/", "-", " ", "-").Replace(t.Name())
+	slug = "inbox-" + strings.ToLower(safe)
+	return slug, "ep-" + slug
 }
 
 // newTestServer starts a tunnel on a real HTTP listener. Real, not

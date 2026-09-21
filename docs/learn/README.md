@@ -71,6 +71,7 @@ built to demonstrate.*
 | 19 | [Multiplexing and correlation](19-multiplexing-and-correlation.md) | Why HTTP gives correlation for free and this does not · the `map[id]chan` pattern · why a mutex, not a manager goroutine · every exit path deletes its entry · waking waiters the instant a tunnel drops |
 | 20 | [Forwarding](20-forwarding.md) | Why forwarding is synchronous and what that costs · delivery failure vs application failure · why a dead local app must not become a 502 · recording the outcome |
 | 21 | [The CLI](21-the-cli.md) | A reverse proxy with an unusual transport · why the `Host` header must be rewritten · not following redirects, not decompressing · tokens on disk, permissions and atomic writes |
+| 22 | [Backoff and jitter](22-backoff-and-jitter.md) | Why a fixed retry delay causes the outage it is recovering from · exponential fixes rate, jitter fixes synchronisation · resetting on connect is a bug · what must never be retried |
 
 **Quiz:** pending — written at the end of the phase.
 

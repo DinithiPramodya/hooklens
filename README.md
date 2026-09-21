@@ -9,9 +9,9 @@ running on your laptop. Replay, diff, and provider-signature verification on top
 > retention schedule. The frontend is compiled into the binary and shows captures arriving
 > live over SSE, with a detail pane that renders JSON as a collapsible tree, headers with
 > duplicates intact, raw text, or a hex dump for binary. The tunnel protocol now has an
-> authenticated WebSocket handshake, and `hooklens forward --to localhost:3000` now
-> delivers captures to a local app and relays its response back to the sender.
-> Reconnection and bounded concurrency are next.
+> authenticated WebSocket handshake, and `hooklens forward --to localhost:3000` delivers
+> captures to a local app, relays its response back to the sender, and reconnects with
+> exponential backoff and jitter on the same URL. Bounded concurrency is next.
 > See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
@@ -169,5 +169,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [19 — Multiplexing and correlation: one connection, many requests](docs/learn/19-multiplexing-and-correlation.md)
 - [20 — Forwarding, and what the provider is told](docs/learn/20-forwarding.md)
 - [21 — The CLI: turning a frame back into an HTTP request](docs/learn/21-the-cli.md)
+- [22 — Exponential backoff, jitter, and the thundering herd](docs/learn/22-backoff-and-jitter.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

@@ -72,11 +72,11 @@ func startFakeCLI(t *testing.T, srv *httptest.Server, respond func(Request) *Res
 // The handshake completing on the client side does not mean the server has
 // finished registering, and asserting on that race would make these tests
 // flaky rather than wrong.
-func waitConnected(t *testing.T, h *Hub) {
+func waitConnected(t *testing.T, h *Hub, endpointID string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if h.Connected(goodID) {
+		if h.Connected(endpointID) {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -93,7 +93,7 @@ func TestForwardRoundTrip(t *testing.T) {
 			BodyB64: "aGVsbG8=", // "hello"
 		}
 	})
-	waitConnected(t, ts.Hub())
+	waitConnected(t, ts.Hub(), goodID)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -141,7 +141,7 @@ func TestForwardCorrelatesOutOfOrder(t *testing.T) {
 		<-gate
 		return &Response{Status: 200, BodyB64: req.Path}
 	})
-	waitConnected(t, ts.Hub())
+	waitConnected(t, ts.Hub(), goodID)
 
 	type result struct {
 		want string
@@ -201,7 +201,7 @@ func TestForwardNoTunnel(t *testing.T) {
 func TestForwardTimeout(t *testing.T) {
 	ts, srv, _ := newTestServer(t, Options{})
 	startFakeCLI(t, srv, func(Request) *Response { return nil }) // never answers
-	waitConnected(t, ts.Hub())
+	waitConnected(t, ts.Hub(), goodID)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
@@ -226,7 +226,7 @@ func TestForwardTimeout(t *testing.T) {
 func TestForwardDisconnectUnblocksImmediately(t *testing.T) {
 	ts, srv, _ := newTestServer(t, Options{})
 	cli := startFakeCLI(t, srv, func(Request) *Response { return nil })
-	waitConnected(t, ts.Hub())
+	waitConnected(t, ts.Hub(), goodID)
 
 	const inFlight = 5
 	errs := make(chan error, inFlight)
@@ -270,7 +270,7 @@ func TestSecondClientWins(t *testing.T) {
 	if env := readFrame(t, first, 5*time.Second); env.Type != TypeHelloOK {
 		t.Fatalf("first handshake failed: %q", env.Type)
 	}
-	waitConnected(t, ts.Hub())
+	waitConnected(t, ts.Hub(), goodID)
 
 	// Second client for the same inbox.
 	startFakeCLI(t, srv, func(req Request) *Response {

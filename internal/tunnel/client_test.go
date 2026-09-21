@@ -82,15 +82,15 @@ func TestWebsocketURL(t *testing.T) {
 	}
 }
 
-func TestCleanDialError(t *testing.T) {
+func TestShortError(t *testing.T) {
 	// The whole point: the actionable clause is the last one, and nobody
 	// reads past the first.
 	err := errors.New(`Get "http://localhost:3000/hook": dial tcp 127.0.0.1:3000: connect: connection refused`)
-	if got := cleanDialError(err); got != "connection refused" {
-		t.Errorf("cleanDialError = %q, want %q", got, "connection refused")
+	if got := ShortError(err); got != "connection refused" {
+		t.Errorf("ShortError = %q, want %q", got, "connection refused")
 	}
-	if got := cleanDialError(errors.New("plain")); got != "plain" {
-		t.Errorf("cleanDialError(plain) = %q", got)
+	if got := ShortError(errors.New("plain")); got != "plain" {
+		t.Errorf("ShortError(plain) = %q", got)
 	}
 }
 
