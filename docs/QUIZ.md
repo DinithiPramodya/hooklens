@@ -14,6 +14,7 @@ without looking, then check.
 | 1 — The mailbox | [06](learn/06-reading-a-request.md) · [07](learn/07-storing-a-request.md) · [08](learn/08-capability-urls.md) · [09](learn/09-pagination.md) · [10](learn/10-background-workers.md) | [below](#phase-1--the-mailbox) |
 | 2 — The inspector UI | [11](learn/11-spa-and-go-embed.md) · [12](learn/12-cors.md) · [13](learn/13-server-sent-events.md) · [14](learn/14-pubsub.md) · [15](learn/15-server-state.md) · [16](learn/16-recursive-rendering.md) | [below](#phase-2--the-inspector-ui) |
 | 3 — The tunnel | [17](learn/17-nat-and-firewalls.md) · [18](learn/18-websockets.md) · [19](learn/19-multiplexing-and-correlation.md) · [20](learn/20-forwarding.md) · [21](learn/21-the-cli.md) · [22](learn/22-backoff-and-jitter.md) · [23](learn/23-bounded-concurrency.md) · [24](learn/24-size-limits.md) · [25](learn/25-showing-delivery.md) | below |
+| 4 — The wedge features | [26](learn/26-hmac.md) · [27](learn/27-replay-and-ssrf.md) · [28](learn/28-structural-diff.md) · [29](learn/29-mutations-and-secrets.md) · [30](learn/30-diagnosing-flaky-tests.md) | below |
 
 ---
 
@@ -1417,3 +1418,288 @@ passed under `-race`, and failed only in a full run.
 
 The general habit: before reading code, work out what the *shape* of the failure rules
 out.
+
+---
+
+# Phase 4 — the wedge features
+
+*Set 2026-09-21. Material: notes [26](learn/26-hmac.md) through
+[30](learn/30-diagnosing-flaky-tests.md).*
+
+> **These are model answers, not recall.** Cover them, answer cold, compare.
+
+---
+
+## Q1. Why is `sha256(secret || body)` not an acceptable MAC? Be specific about the mechanism.
+
+Because SHA-2 is a **Merkle–Damgård** construction: it absorbs a message block by block
+into an internal state, and the digest **is** that final state.
+
+So given a valid `sha256(secret || body)`, an attacker can load the digest back as the
+starting state and keep absorbing. They produce a valid tag for
+`secret || body || padding || anything-they-choose` **without ever learning the secret**.
+That is a **length-extension attack**.
+
+HMAC's nesting is the fix, not decoration:
+`H(key ⊕ opad || H(key ⊕ ipad || message))`. The inner hash produces a fixed-size digest
+and the **outer** hash absorbs that digest rather than the message, so extending the inner
+result gets an attacker nowhere without the key.
+
+Worth adding: a plain `sha256(body)` with no secret at all is an *integrity* check, not an
+authentication one — the function is public, so anyone can compute it over their own body.
+
+## Q2. MAC or signature? What can you prove to a third party with each?
+
+A **MAC** uses one shared secret. Verification requires the same key used to create the
+tag, which means the verifier could equally have forged it — so a MAC proves **nothing to
+a third party**. It is only evidence to someone who knows they did not create it
+themselves.
+
+A **signature** uses a key pair: anyone with the public key can verify, and only the holder
+of the private key can produce. That is non-repudiation, and it is what you need if a third
+party has to adjudicate.
+
+Webhooks use MACs because both ends already share a secret and MACs are far cheaper. The
+trade is invisible until someone asks you to prove a provider really sent something, at
+which point a MAC cannot help.
+
+## Q3. Why must signature comparison be constant-time, and what specifically leaks?
+
+`==` on strings returns at the first differing byte. The *time taken* therefore encodes
+**how long the matching prefix was**.
+
+An attacker who can measure that turns an infeasible search into a linear one: guess the
+first byte, keep whichever of the 256 candidates took marginally longer, move to the
+second. A 256-bit tag goes from 2^256 guesses to a few thousand requests.
+
+The comparison must take the same time regardless of where the difference is — `hmac.Equal`,
+not `==`.
+
+Two details worth knowing. **Length is not secret** — it is fixed by the algorithm and
+visible in the header — so a length mismatch is rejected *before* the constant-time
+compare rather than inside it, since no constant-time primitive defines behaviour for
+unequal lengths. And `subtle.ConstantTimeCompare(nil, nil)` returns **1**, which is the
+kind of surprise that costs a test.
+
+## Q4. A developer says "my signature check fails and I have triple-checked the secret." What are the three most likely causes, in order?
+
+1. **The body was re-serialised.** A framework parsed the JSON and their code signed
+   `JSON.stringify(parsed)` rather than the raw bytes. Key order and whitespace change, the
+   MAC changes, the secret is fine. This is far and away the most common.
+2. **Whitespace.** A trailing newline, or middleware that trimmed the body.
+3. **The encoding.** Shopify uses base64 where Stripe and GitHub use hex, and code copied
+   from the wrong example produces a *correct digest in the wrong alphabet*.
+
+This is why the verifier shows the exact canonical string rather than a boolean, and why
+`VerifyShopify` recomputes the tag in hex and says "the signature is correct but
+HEX-encoded" when that matches. A checkbox sends people to check a secret that was never
+wrong.
+
+## Q5. Stripe sends several `v1` values in one header. Why, and what breaks if you check only the first?
+
+**Secret rotation.** While two secrets are valid, Stripe signs with both and sends both
+tags. Any match is a pass.
+
+Checking only the first works perfectly — until someone rotates a secret, at which point
+deliveries start failing for reasons unrelated to any recent deploy. It is the worst
+possible time to discover the bug, and the test for it deliberately puts the *old* secret's
+tag first so a first-match-only implementation fails.
+
+## Q6. Should the replay window be checked before or after the signature? Defend the order.
+
+**After.** Checking the cheap thing first is the reflex and it is wrong here, because it
+reports two different situations identically.
+
+An expired request with a **valid** tag is a slow delivery, a retry, or clock skew — the
+sender is genuine and something is late. An expired request with a **garbage** tag is an
+attack, or a misconfiguration. Those want different messages and different reactions, and
+checking the timestamp first collapses them into one.
+
+Related: a timestamp in the **future** is never a replay. It is a clock problem, and the
+hint should say NTP rather than "this is normal for a retry".
+
+## Q7. Why does `VerifyStripe` take `now` as a parameter instead of calling `time.Now()`?
+
+Two reasons and the second is the one that matters.
+
+It makes the replay window testable without sleeping. And it lets a **stored capture be
+re-verified against the time it arrived**, rather than against the wall clock. With
+`time.Now()`, every capture would read "expired" five minutes after landing — true, and
+completely useless for a tool whose whole purpose is inspecting things after the fact.
+
+## Q8. GitHub's scheme signs the bare body. What does it therefore not protect against, and what is their answer?
+
+**Replay.** With no timestamp in the signed string, a captured delivery can be resent
+verbatim, forever, and will verify every time. The signature proves authenticity but says
+nothing about freshness.
+
+GitHub's answer is `X-GitHub-Delivery`, a unique id per delivery, and the expectation that
+the receiver **deduplicates on it**. That moves the work to the application — and most
+applications do not do it, which is worth knowing before you rely on "we check
+signatures".
+
+## Q9. You are adding "replay this request to a URL I type". What is the vulnerability, and why is "the user asked for it" not a defence?
+
+**SSRF** — the server becomes a *confused deputy*. It will POST attacker-chosen bytes to an
+attacker-chosen destination, using its own network position. That reaches things the
+requester cannot: `localhost`, private ranges, and on any cloud host the metadata service
+at `169.254.169.254`, which hands out credentials to whatever asks it.
+
+"The user asked for it" is not a defence because **the user is the attacker**. Anyone who
+can create an inbox can drive this, and the server's network access is the thing being
+borrowed.
+
+## Q10. Where must the destination check live, and why is checking before the request insufficient?
+
+In the **dialer**, on the address actually being connected to — `Dialer.Control` in Go.
+
+Resolving the hostname yourself, checking the result, and then handing the URL to
+`http.Client` means the name is resolved a **second** time when the connection is made. A
+hostile DNS server answers the first lookup with a public address and the second with
+`127.0.0.1`. That is **DNS rebinding**, and any check that runs earlier than the connect is
+a check an attacker can race.
+
+`Control` runs with the literal address the kernel is about to use, which closes the
+window. A pre-check is still worth having for the *error message* — a bad scheme should be
+reported as such rather than as a dial failure — but it must be documented as the
+convenience and not the control, so that whoever deletes the "redundant" one deletes the
+right one.
+
+Also required: **refuse or re-check redirects**, since a perfectly public URL can 302 to
+the metadata address; and set `Proxy: nil`, because an `HTTP_PROXY` in the server's
+environment would route every request around the dial guard.
+
+## Q11. Name two things Go's `netip` predicates will not do for you here.
+
+**They do not unmap.** `::ffff:127.0.0.1` is loopback, and every `Is*` predicate returns
+**false** for it in its IPv4-mapped form. One call to `Unmap()` closes the classic bypass.
+
+**`IsGlobalUnicast` does not mean "routes on the public internet".** It is about the
+addressing architecture. Carrier-grade NAT space, `100.64.0.0/10`, is global unicast and is
+also somebody's ISP-internal network. Documentation ranges likewise. Those need an explicit
+prefix list — which I learned by asserting the opposite in a comment and having a test
+prove it wrong.
+
+## Q12. Why is a text diff the wrong tool for comparing two JSON payloads?
+
+Three reasons, all properties of JSON rather than of the algorithm:
+
+- **Object keys have no order.** Two semantically identical payloads can serialise with
+  keys in different orders, and a line diff reports every one as changed. The signal
+  drowns.
+- **Whitespace and indentation are not data**, but they are lines.
+- **A line is the wrong unit.** A change deep inside a long line shows the whole line
+  replaced; adding one nesting level re-indents and therefore "changes" every descendant.
+
+A structural diff compares by **path**, so `data.object.amount: 2500 → 9900` is the whole
+output.
+
+## Q13. How do you diff two arrays? There is no right answer — give both and say when each applies.
+
+**By index**: compare `[0]` with `[0]`. Simple and predictable, and catastrophic for an
+insertion — add an element at the front and every subsequent element reports as changed,
+which is true and useless.
+
+**By identity**: match elements that are "the same thing", usually via an `id` field, then
+diff the matched pairs. Far better output, and it rests on a heuristic that can be wrong.
+
+The rule used here: id matching applies **only** when every element on both sides is an
+object with a unique scalar id. A partial match would mean two strategies inside one array,
+producing output nobody can reason about. And when it applies, the path names the id
+(`items[id=b].v`) rather than an index, because the element may have moved and a positional
+path would be a lie.
+
+## Q14. Why `UseNumber()` when decoding JSON for a diff?
+
+Because `encoding/json` decodes numbers into `float64` by default, and that loses two
+things a diff cares about.
+
+**Precision**: integers above 2^53 are rounded, so two ids differing in the last digit
+compare **equal** — the worst possible failure for a tool whose entire job is spotting
+differences.
+
+**Form**: `2500` and `2500.0` become indistinguishable. For a tool that shows what was on
+the wire, those are different tokens and reporting them as a change is the honest answer.
+
+`json.Number` keeps the original token, which is what should have been compared all along.
+
+## Q15. Your diff output is correct but differs in order between runs. Why, and why does it matter?
+
+**Go randomises map iteration deliberately**, so walking an object's keys without sorting
+produces a different order each time.
+
+It matters because a non-deterministic diff is untestable and impossible to compare against
+a previous run by eye — which is the main thing a person does with a diff. Sorting the key
+union is correctness here, not tidiness.
+
+## Q16. A query and a mutation. What are the differences, and where does the distinction bite?
+
+A **query** is keyed, cached, deduplicated, and runs on mount. It declares *this data
+should be here*. A **mutation** has no key, is not cached, never runs by itself, and is
+triggered by a person. It instructs *do this now*.
+
+Where it bites: a query running twice is free — the second hits the cache. A **replay**
+running twice sends two requests, and the developer's app is hit twice with a real event
+that cannot be undone. Hence `isPending` and a disabled trigger.
+
+And the half that is easy to miss: **mutations invalidate nothing by default.** A replay
+through the tunnel creates a new capture server-side, so without an explicit
+`invalidateQueries` the list silently shows stale data while everything appears to work.
+
+## Q17. A user types a webhook signing secret into your web UI. Where may it live, and why?
+
+In memory only — component state — and nowhere else.
+
+A signing secret is a **bearer credential for forging events**: anyone holding it can send
+the developer's own application a payload it will believe. `localStorage` persists across
+restarts and across users of a shared machine, and is readable by any script injected into
+the origin. `sessionStorage` is narrower and still survives reloads. `useState` lives as
+long as the tab and is gone on refresh.
+
+Re-typing it is mildly annoying and is the right trade. Supporting details: the field is
+`type="password"` with `autoComplete="new-password"` (`off` is widely ignored by password
+managers), the server never stores it, the endpoint is a POST so it never reaches a query
+string, and the UI *says* it is not stored — because a claim in a doc comment protects
+nobody.
+
+## Q18. A test passes alone and fails in the suite. A test passes at `-count=1` and fails at `-count=3`. A test hangs instead of failing. What does each tell you before you read any code?
+
+- **Passes alone, fails in a suite** → shared state or ordering. Logic does not care what
+  ran before it.
+- **`-count=1` passes, `-count=3` fails** → state outliving a test *within one process*: a
+  goroutine still running, a registry entry, a port.
+- **Hangs rather than fails** → something waits on something that will never happen. A
+  wrong answer arrives fast; a missing wakeup never arrives.
+
+A fourth, the most informative: **fails with a different error than expected**. `ErrTimeout`
+where `ErrNoTunnel` was expected meant the registry was *right* and the problem was
+downstream of it — that single distinction was the whole diagnosis.
+
+## Q19. Your test reports "no reconnection within 20 seconds". The reconnection code is fine. What kind of bug is this?
+
+A **precondition that skipped itself**.
+
+The test waited for the client to report a connection, then looked the client up in the
+server's registry to drop it. But the client reports success when it reads `hello_ok`,
+which the server writes *before* it registers — so the lookup could find `nil`. The code
+said `if victim != nil { drop() }`, so nothing was dropped, nothing reconnected, and the
+test blamed reconnection.
+
+The lesson is about the `if`, not the race: **a test that cannot establish its own scenario
+must fail loudly rather than skip**. Silently continuing converts "my setup did not work"
+into a twenty-second timeout pointing at innocent code.
+
+## Q20. `CloseNow` after writing a close frame — what can go wrong at the TCP level?
+
+An abortive close sends **RST**, and an RST makes the peer **discard whatever is already
+sitting in its receive buffer** — including the close frame just written to explain the
+disconnection.
+
+So the peer sees an unexplained EOF, which is precisely what the application-level close
+frame exists to prevent. The fix is a *bounded* graceful close: attempt the closing
+handshake, give up after a second, fall back to the abort. A live peer answers in
+microseconds; a dead one costs a second.
+
+The general shape is worth keeping: **"make the teardown fast" and "make the teardown
+informative" are in tension**, and choosing speed without noticing the cost is easy — it
+was an over-application of an earlier, correct fix.

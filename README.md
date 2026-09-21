@@ -4,7 +4,7 @@ A webhook inspector with a self-hosted tunnel. It gives you a public URL, captur
 request sent to it byte-for-byte, streams them to a web UI, and forwards them to code
 running on your laptop. Replay, diff, and provider-signature verification on top.
 
-> **Status: Phase 3 of 6 complete — the tunnel works.** Requests are captured, stored
+> **Status: Phase 4 of 6 complete — the wedge features are in.** Requests are captured, stored
 > byte-for-byte, authenticated with per-inbox tokens, paginated by cursor, and expired on a
 > retention schedule. The frontend is compiled into the binary and shows captures arriving
 > live over SSE, with a detail pane that renders JSON as a collapsible tree, headers with
@@ -13,7 +13,10 @@ running on your laptop. Replay, diff, and provider-signature verification on top
 > captures to a local app, relays its response back to the sender, and reconnects with
 > exponential backoff and jitter on the same URL. In-flight forwards are bounded per
 > tunnel, oversized bodies are refused rather than silently truncated, and the UI shows
-> whether each capture actually reached your app. Signature verification is Phase 4.
+> whether each capture actually reached your app. Captures can be replayed (to the tunnel
+> or a URL), edited and replayed, diffed structurally, and checked against Stripe, GitHub,
+> Shopify and Slack signatures -- showing the exact bytes that were signed. Hardening and
+> release are Phase 5.
 > See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
