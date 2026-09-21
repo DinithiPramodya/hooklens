@@ -172,3 +172,34 @@ func (s *Store) TouchEndpoint(ctx context.Context, id string, at time.Time) erro
 	_, err := s.pool.Exec(ctx, q, id, at)
 	return err
 }
+
+// DeleteEndpoint removes an inbox and, by cascade, every capture it holds.
+//
+// No HTTP route exposes this yet -- it exists because the load tests and the
+// database diagnostics create throwaway inboxes and must not leave hundreds
+// of thousands of rows behind. That is not hypothetical: an earlier load run
+// left 176,000 rows in the development database and the next `go test ./...`
+// failed in the sweeper, for reasons that looked nothing like "the load test
+// did not clean up".
+//
+// The cascade is declared on requests.endpoint_id (migration 00002), so this
+// is one statement rather than two, and there is no window in which an inbox
+// is gone while its captures are not.
+//
+// When a delete-inbox feature does ship, it should also call the ingest
+// handler's ForgetEndpoint so the resolution cache does not keep answering
+// for it -- see docs/learn/34-caching-and-invalidation.md.
+func (s *Store) DeleteEndpoint(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `delete from endpoints where id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete endpoint: %w", err)
+	}
+	// A delete that matched nothing is reported, not shrugged off. Deleting
+	// an id that does not exist means the caller is wrong about something,
+	// and the whole reason this method exists is that a silent no-op cleanup
+	// is indistinguishable from a working one until the rows pile up.
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("delete endpoint %s: %w", id, ErrNotFound)
+	}
+	return nil
+}

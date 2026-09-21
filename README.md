@@ -319,7 +319,7 @@ carries many requests without leaking a goroutine, and
 2.5x bottleneck in a column nobody reads.
 
 <details>
-<summary>All 36 notes, in build order</summary>
+<summary>All 37 notes, in build order</summary>
 
 - [01 — Webhooks, and the HTTP underneath](docs/learn/01-webhooks-and-http.md)
 - [02 — Containers, images, and Compose](docs/learn/02-containers.md)
@@ -357,6 +357,7 @@ carries many requests without leaking a goroutine, and
 - [34 — Caching the inbox lookup, and the part everyone gets wrong](docs/learn/34-caching-and-invalidation.md)
 - [35 — Cross-compilation, static binaries, and how a `brew install` works](docs/learn/35-release-and-distribution.md)
 - [36 — The README as a product page](docs/learn/36-the-readme-as-a-product-page.md)
+- [37 — Why the retention sweep could not use an index](docs/learn/37-indexable-predicates.md)
 
 </details>
 

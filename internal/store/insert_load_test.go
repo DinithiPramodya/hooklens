@@ -31,12 +31,25 @@ func TestInsertThroughput(t *testing.T) {
 	if err != nil {
 		t.Skipf("no database reachable (%v)", err)
 	}
-	defer st.Close()
+	// t.Cleanup, not defer: a deferred Close runs BEFORE any t.Cleanup, so the
+	// endpoint cleanup below would find a closed pool. Cleanups run LIFO, so
+	// registering Close first makes it run last.
+	t.Cleanup(st.Close)
 
 	ep, err := st.CreateEndpoint(ctx, "insert throughput")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Clean up after itself. Not tidiness: an earlier load run left 176,000
+	// rows in the development database, and the next `go test ./...` failed
+	// in the SWEEPER -- whose retention query was doing a full scan and got
+	// slow enough to miss its deadline. The failure looked nothing like "a
+	// load test did not clean up".
+	t.Cleanup(func() {
+		if err := st.DeleteEndpoint(context.Background(), ep.ID); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
 
 	body := []byte(`{"event":"load.test","data":{"n":1,"s":"a short but not empty payload"}}`)
 
@@ -75,18 +88,5 @@ func TestInsertThroughput(t *testing.T) {
 		fmt.Printf("concurrency %2d: %4d inserts in %8v = %7.0f/s (%.2fms each)\n",
 			conc, n, elapsed.Round(time.Millisecond), float64(n)/elapsed.Seconds(),
 			float64(elapsed.Microseconds())/float64(n)/1000*float64(conc))
-	}
-}
-
-// newCaptureRequest builds a throwaway capture for the load diagnostics.
-func newCaptureRequest(body []byte) *capture.Request {
-	return &capture.Request{
-		Method:       "POST",
-		Path:         "/load",
-		Body:         body,
-		DeclaredSize: int64(len(body)),
-		SourceIP:     netip.MustParseAddr("127.0.0.1"),
-		Headers:      []capture.Header{{Name: "Content-Type", Value: "application/json"}},
-		ReceivedAt:   time.Now(),
 	}
 }

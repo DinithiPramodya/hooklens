@@ -128,6 +128,7 @@ database round trip.*
 | | Note | Covers |
 |---|---|---|
 | 36 | [The README as a product page](36-the-readme-as-a-product-page.md) | Ordering by the reader's questions, not the system's structure · time-to-first-success · why the demo outranks every paragraph · a status line that does not rot |
+| 37 | [Why the retention sweep could not use an index](37-indexable-predicates.md) | Sargable predicates · why a filter that depends on a joined row defeats both the index and the `LIMIT` · denormalising to make a predicate indexable, and who then maintains the copy · 276ms → 0.75ms |
 
 ---
 

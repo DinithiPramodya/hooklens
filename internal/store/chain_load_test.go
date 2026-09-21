@@ -33,12 +33,22 @@ func TestCaptureChainThroughput(t *testing.T) {
 	if err != nil {
 		t.Skipf("no database reachable (%v)", err)
 	}
-	defer st.Close()
+	// t.Cleanup, not defer: a deferred Close runs BEFORE any t.Cleanup, so the
+	// endpoint cleanup below would find a closed pool. Cleanups run LIFO, so
+	// registering Close first makes it run last.
+	t.Cleanup(st.Close)
 
 	ep, err := st.CreateEndpoint(ctx, "chain throughput")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// See the note in insert_load_test.go: leaving these rows behind breaks a
+	// later, unrelated-looking test.
+	t.Cleanup(func() {
+		if err := st.DeleteEndpoint(context.Background(), ep.ID); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
 	body := []byte(`{"event":"load.test","data":{"n":1,"s":"a short but not empty payload"}}`)
 
 	steps := []struct {

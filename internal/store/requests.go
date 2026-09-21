@@ -70,11 +70,23 @@ func (s *Store) InsertRequest(ctx context.Context, endpointID string, req *captu
 		ip = &a
 	}
 
+	// expires_at is computed here, in the same statement, from the inbox's
+	// retention setting. A subquery rather than a value passed in from Go:
+	// the caller holds a cached *Endpoint that does not carry retention_hours,
+	// and an indexed primary-key lookup inside a statement we are already
+	// running costs far less than another round trip -- or than threading a
+	// field through the cache so it can go stale.
+	//
+	// The column exists so the retention sweep can use an index; the sweep's
+	// predicate used to span two tables and therefore scanned all of them.
+	// See docs/learn/37-indexable-predicates.md.
 	const q = `
 		insert into requests (
 			endpoint_id, method, path, query, headers,
-			body, body_size, body_truncated, declared_size, source_ip, received_at
-		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			body, body_size, body_truncated, declared_size, source_ip, received_at,
+			expires_at
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz,
+			$11::timestamptz + make_interval(hours => (select retention_hours from endpoints where id = $1)))
 		returning id::text`
 
 	var id string
@@ -290,19 +302,27 @@ func (s *Store) DeleteExpiredRequests(ctx context.Context, batch int) (int64, er
 
 	// The subquery picks the ids first, then the outer statement deletes
 	// exactly those. DELETE ... LIMIT is not valid SQL in Postgres, and even
-	// where it exists a bare `delete ... where received_at < ...` would have
+	// where it exists a bare `delete ... where expires_at < now()` would have
 	// no bound at all -- one statement holding locks across an entire backlog.
 	//
-	// make_interval(hours => ...) rather than string concatenation into an
-	// interval literal: it takes the value as a parameter instead of building
-	// SQL text from a column.
+	// This used to join endpoints and compare against
+	// `now() - make_interval(hours => e.retention_hours)`. That predicate
+	// could not be evaluated until after the join, so no index on requests
+	// applied, and the LIMIT did not help either: a filter that runs after the
+	// join has to keep scanning until it finds enough matches, which when
+	// nothing is expired means all of them. Measured at 576,639 rows: 276ms
+	// per tick to return nothing.
+	//
+	// With expires_at on the row and indexed, this is an index scan in expiry
+	// order that stops after $1 -- the cost is proportional to what gets
+	// DELETED, not to what is stored. docs/learn/37-indexable-predicates.md
 	const q = `
 		delete from requests
 		where id in (
-			select r.id
-			from requests r
-			join endpoints e on e.id = r.endpoint_id
-			where r.received_at < now() - make_interval(hours => e.retention_hours)
+			select id
+			from requests
+			where expires_at < now()
+			order by expires_at
 			limit $1
 		)`
 
@@ -316,9 +336,46 @@ func (s *Store) DeleteExpiredRequests(ctx context.Context, batch int) (int64, er
 // SetRetention changes how long an inbox keeps captures. Used by tests and,
 // later, by the settings UI.
 func (s *Store) SetRetention(ctx context.Context, endpointID string, hours int) error {
-	const q = `update endpoints set retention_hours = $2 where id = $1`
-	_, err := s.pool.Exec(ctx, q, endpointID, hours)
+	// Two statements, in a transaction, because requests.expires_at is a
+	// DERIVED COPY of this setting and something has to maintain it.
+	//
+	// This is the cost of the denormalisation in migration 00009. Without the
+	// second statement, shortening an inbox's retention would apply only to
+	// captures arriving afterwards, and the existing ones would sit there
+	// until their old, longer expiry -- silently, with the settings page
+	// claiming otherwise. Lengthening it would be worse: rows already past
+	// their old expiry would be deleted by the next sweep despite the user
+	// having just asked to keep them.
+	//
+	// A transaction because a failure between the two leaves the column
+	// disagreeing with the setting it is derived from, which is the one state
+	// nothing else in the system checks for.
+	//
+	// It is an indexed update over one inbox's rows, on a rare operation.
+	// Making it cheap is not worth making it wrong.
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("set retention: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful commit
+
+	if _, err := tx.Exec(ctx,
+		`update endpoints set retention_hours = $2 where id = $1`,
+		endpointID, hours,
+	); err != nil {
+		return fmt.Errorf("set retention: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`update requests
+		    set expires_at = received_at + make_interval(hours => $2)
+		  where endpoint_id = $1`,
+		endpointID, hours,
+	); err != nil {
+		return fmt.Errorf("set retention (reproject expiries): %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("set retention: %w", err)
 	}
 	return nil

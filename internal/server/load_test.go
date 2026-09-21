@@ -183,6 +183,17 @@ func loadStore(t *testing.T) (*store.Store, *store.NewEndpoint) {
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
+	// A 60-second run at 1,000 req/s leaves up to 60,000 rows. Left behind,
+	// they accumulate across runs and eventually break an unrelated test --
+	// which is exactly what happened: 176,000 leftover rows pushed the
+	// retention sweep's full-table scan past TestSweepDeletes's deadline.
+	// context.Background(), not t.Context(): the test context is already
+	// cancelled by the time cleanups run.
+	t.Cleanup(func() {
+		if err := st.DeleteEndpoint(context.Background(), ep.ID); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
 	return st, ep
 }
 

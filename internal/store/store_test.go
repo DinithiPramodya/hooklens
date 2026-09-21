@@ -626,8 +626,10 @@ func TestIndexIsUsed(t *testing.T) {
 
 	// One statement rather than 5,000 round trips.
 	_, err = st.pool.Exec(ctx, `
-		insert into requests (endpoint_id, method, path, declared_size, received_at)
-		select $1, 'POST', '/p' || g, null, now() - (g || ' seconds')::interval
+		insert into requests (endpoint_id, method, path, declared_size, received_at, expires_at)
+		select $1, 'POST', '/p' || g, null, now() - (g || ' seconds')::interval,
+		       now() - (g || ' seconds')::interval
+		         + make_interval(hours => (select retention_hours from endpoints where id = $1))
 		from generate_series(1, 5000) g`, ep.ID)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
@@ -690,8 +692,10 @@ func TestCursorPlanIsNotOffsetPlan(t *testing.T) {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
 	_, err = st.pool.Exec(ctx, `
-		insert into requests (endpoint_id, method, path, declared_size, received_at)
-		select $1, 'POST', '/p' || g, null, now() - (g || ' seconds')::interval
+		insert into requests (endpoint_id, method, path, declared_size, received_at, expires_at)
+		select $1, 'POST', '/p' || g, null, now() - (g || ' seconds')::interval,
+		       now() - (g || ' seconds')::interval
+		         + make_interval(hours => (select retention_hours from endpoints where id = $1))
 		from generate_series(1, 5000) g`, ep.ID)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
@@ -842,8 +846,10 @@ func TestDeleteExpiredRequestsBatching(t *testing.T) {
 	}
 
 	_, err = st.pool.Exec(ctx, `
-		insert into requests (endpoint_id, method, path, declared_size, received_at)
-		select $1, 'POST', '/old' || g, null, now() - interval '5 hours'
+		insert into requests (endpoint_id, method, path, declared_size, received_at, expires_at)
+		select $1, 'POST', '/old' || g, null, now() - interval '5 hours',
+		       now() - interval '5 hours'
+		         + make_interval(hours => (select retention_hours from endpoints where id = $1))
 		from generate_series(1, 25) g`, ep.ID)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
