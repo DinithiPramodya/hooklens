@@ -39,6 +39,20 @@ type Config struct {
 	// raising it raises both ends together.
 	MaxBody int64
 
+	// TrustProxy says whether an X-Forwarded-For header can be believed.
+	//
+	// Defaults to FALSE, and the default direction matters: getting this
+	// wrong one way under-counts distinct clients (a shared limit, annoying),
+	// and the other way lets anyone forge their identity by setting a header
+	// (no limit at all, while looking protected). Under-counting is the safe
+	// failure.
+	TrustProxy bool
+
+	// RateCreate is inbox creations allowed per IP per minute.
+	RateCreate float64
+	// RateCapture is captures allowed per inbox per second.
+	RateCapture float64
+
 	// BaseDomain is the domain the app itself is served from, e.g.
 	// "hooklens.dev". A single label in front of it -- "a7f3.hooklens.dev" --
 	// is a capture inbox. See server.Resolve.
@@ -60,6 +74,9 @@ func Load() (Config, error) {
 		DatabaseURL:   env("DATABASE_URL", "postgres://hooklens:hooklens@localhost:5432/hooklens?sslmode=disable"),
 		SweepInterval: envDuration("HOOKLENS_SWEEP_INTERVAL", sweepIntervalDefault),
 		MaxBody:       envBytes("HOOKLENS_MAX_BODY", capture.DefaultMaxBody),
+		TrustProxy:    env("HOOKLENS_TRUST_PROXY", "") == "1",
+		RateCreate:    envFloat("HOOKLENS_RATE_CREATE", 10),
+		RateCapture:   envFloat("HOOKLENS_RATE_CAPTURE", 50),
 	}
 
 	// Validate at startup, not at first use. A process that boots, reports
@@ -137,4 +154,17 @@ func envBytes(key string, def int64) int64 {
 		return def
 	}
 	return n * mult
+}
+
+// envFloat reads a positive rate, falling back on anything unusable.
+func envFloat(key string, def float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.ParseFloat(raw, 64)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }

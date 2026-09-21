@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,9 @@ type Handler struct {
 	// purely so tests can drive it in milliseconds instead of waiting 30
 	// seconds per assertion -- the same reasoning as Server.heartbeat.
 	forwardTimeout time.Duration
+	// limiter caps captures per inbox. Nil means unlimited, which keeps
+	// every test that does not care about limiting free of setup.
+	limiter Limiter
 }
 
 func New(log *slog.Logger, st *store.Store, br *broker.Broker, fwd Forwarder, maxBody int64) *Handler {
@@ -127,6 +131,26 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 		// we genuinely have not stored anything.
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "temporarily unavailable"})
 		return
+	}
+
+	// Limited AFTER resolving the inbox -- the endpoint id is the key -- and
+	// BEFORE reading the body, so a refused request never costs us up to a
+	// megabyte of read.
+	//
+	// Above the durability line, deliberately. A 429 here means nothing was
+	// stored, so a provider retrying produces no duplicate. The same check
+	// placed below the line would reject a capture we already hold, which is
+	// the Phase 0 quiz Q1 bug wearing a rate limiter.
+	if h.limiter != nil {
+		if ok, retry := h.limiter.Allow(ep.ID); !ok {
+			h.log.Warn("capture rate limited", "inbox", slug, "retry_after", retry)
+			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(retry.Seconds()+0.999))))
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{
+				"error": "rate limit exceeded for this inbox",
+				"hint":  "Raise HOOKLENS_RATE_CAPTURE if this is legitimate traffic.",
+			})
+			return
+		}
 	}
 
 	req, err := capture.FromHTTP(r, h.maxBody)
@@ -450,3 +474,18 @@ func (h *Handler) SetMaxBody(n int64) {
 		h.maxBody = n
 	}
 }
+
+// Limiter caps how often an inbox may be written to.
+//
+// An interface declared here, in the consumer, like Forwarder above.
+// internal/ingest does not need to know how the limiting is implemented,
+// and a nil limiter means no limiting.
+type Limiter interface {
+	Allow(key string) (ok bool, retryAfter time.Duration)
+}
+
+// SetLimiter installs a per-inbox rate limiter.
+//
+// Same contract as the other setters: called before the handler serves
+// anything, because it is a plain field write with no lock.
+func (h *Handler) SetLimiter(l Limiter) { h.limiter = l }

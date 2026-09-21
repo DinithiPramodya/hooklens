@@ -102,7 +102,7 @@ func run() error {
 		sw.Run(runCtx)
 	}()
 
-	serveErr := serve(runCtx, cfg, log, st)
+	serveErr := serve(runCtx, cfg, log, st, sw)
 
 	// Stop the sweeper and WAIT for it before returning -- the deferred
 	// st.Close() runs the moment we do, and closing the pool out from under
@@ -114,12 +114,25 @@ func run() error {
 	return serveErr
 }
 
-func serve(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.Store) error {
+func serve(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.Store, sw *sweeper.Sweeper) error {
 	log.Info("starting", "version", version, "env", cfg.Env, "addr", cfg.Addr, "base_domain", cfg.BaseDomain)
+
+	handler := server.New(ctx, cfg, log, st)
+
+	// The rate limiters keep one bucket per key, so something has to forget
+	// the idle ones -- otherwise the map grows with every distinct client,
+	// which is a leak driven by exactly the traffic a limiter exists to
+	// handle. Reusing the sweeper's timer rather than starting a second
+	// goroutine: one thing to shut down, and it already recovers from panics.
+	sw.OnTick(func() {
+		if c, p := handler.EvictLimiters(); c+p > 0 {
+			log.Debug("evicted idle rate limiters", "create", c, "capture", p)
+		}
+	})
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: server.New(ctx, cfg, log, st),
+		Handler: handler,
 
 		// ReadHeaderTimeout, not ReadTimeout. ReadTimeout caps the time to read
 		// headers AND body, and a legitimate provider on a slow link may take a

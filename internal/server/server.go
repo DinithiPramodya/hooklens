@@ -17,6 +17,7 @@ import (
 	"github.com/DinithiPramodya/hooklens/internal/broker"
 	"github.com/DinithiPramodya/hooklens/internal/config"
 	"github.com/DinithiPramodya/hooklens/internal/ingest"
+	"github.com/DinithiPramodya/hooklens/internal/ratelimit"
 	"github.com/DinithiPramodya/hooklens/internal/replay"
 	"github.com/DinithiPramodya/hooklens/internal/store"
 	"github.com/DinithiPramodya/hooklens/internal/tunnel"
@@ -50,6 +51,16 @@ type Server struct {
 	// tunnel serves the CLI's WebSocket. Its lifetime is the process, not a
 	// request: see the comment on its baseCtx.
 	tunnel *tunnel.Server
+	// createLimiter caps inbox creation per IP. That endpoint is
+	// deliberately unauthenticated -- there is nobody to authenticate yet
+	// -- so a loop against it is free, and this is the only thing standing
+	// between that loop and a full database.
+	createLimiter *ratelimit.Limiter
+	// captureLimiter caps captures per INBOX, not per IP. A provider is a
+	// small set of addresses hitting many inboxes, so per-IP here would
+	// limit legitimate traffic; per-inbox limits the resource being
+	// consumed regardless of who is consuming it.
+	captureLimiter *ratelimit.Limiter
 	// replayClient refuses private and link-local destinations. Built once:
 	// it holds a connection pool, and a per-request client would discard it.
 	replayClient *http.Client
@@ -93,8 +104,29 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.Sto
 		tunnel.Options{},
 	)
 
+	// Zero means "use the default", the same contract as ingest.New's
+	// maxBody. Not pedantry: a config.Config built by hand -- which every
+	// test does -- would otherwise carry a rate of ZERO, and ratelimit.New
+	// clamps that to 1/sec. A limiter nobody configured would then reject
+	// the second request of every test, which is exactly how this landed
+	// the first time.
+	rateCreate, rateCapture := cfg.RateCreate, cfg.RateCapture
+	if rateCreate <= 0 {
+		rateCreate = defaultRateCreate
+	}
+	if rateCapture <= 0 {
+		rateCapture = defaultRateCapture
+	}
+
+	// Per minute for creation, per second for captures. Bursts are sized so
+	// a normal user never notices: a handful of inboxes in a row, and a
+	// provider delivering a backlog.
+	s.createLimiter = ratelimit.New(rateCreate/60, 5)
+	s.captureLimiter = ratelimit.New(rateCapture, rateCapture*2)
+
 	s.replayClient = replay.SafeClient(replayTimeout)
 	s.ingest = ingest.New(log, st, br, s.tunnel.Hub(), cfg.MaxBody)
+	s.ingest.SetLimiter(s.captureLimiter)
 	s.app = s.appRoutes()
 
 	// The middleware chain is built once, at construction, not per request.
@@ -221,6 +253,15 @@ func unauthorized(w http.ResponseWriter) {
 }
 
 func (s *Server) handleCreateEndpoint(w http.ResponseWriter, r *http.Request) {
+	// Checked FIRST, before reading the body or touching the database. A
+	// limiter that runs after the expensive work has not saved anything --
+	// rejecting in microseconds is the entire economic argument for having
+	// one.
+	if ok, retry := s.createLimiter.Allow(clientIP(r, s.cfg.TrustProxy)); !ok {
+		tooManyRequests(w, retry)
+		return
+	}
+
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -371,3 +412,56 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+// tooManyRequests writes a 429 with a Retry-After.
+//
+// The header is not decoration. A 429 with no indication of when to try
+// again leaves a well-behaved client guessing, and guessing means retrying
+// too soon -- so the limiter generates exactly the load it exists to
+// prevent.
+func tooManyRequests(w http.ResponseWriter, retryAfter time.Duration) {
+	// Seconds, rounded UP: rounding down tells a client to retry before a
+	// token exists, which produces a second 429 and a small retry storm.
+	secs := int(retryAfter.Seconds())
+	if retryAfter > 0 && float64(secs) < retryAfter.Seconds() {
+		secs++
+	}
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	writeJSON(w, http.StatusTooManyRequests, map[string]any{
+		"error":       "rate limit exceeded",
+		"retry_after": secs,
+	})
+}
+
+// EvictLimiters drops rate-limiter buckets that have been idle.
+//
+// Called by the sweeper, which already wakes on a timer -- adding a second
+// goroutine for a map cleanup would be two things to shut down instead of
+// one.
+//
+// The idle window is generous compared to the refill rate: any bucket
+// untouched for this long is certainly full, and a full bucket is
+// indistinguishable from a new one, so forgetting it changes nothing.
+func (s *Server) EvictLimiters() (create, capture int) {
+	const idle = 15 * time.Minute
+	return s.createLimiter.Evict(idle), s.captureLimiter.Evict(idle)
+}
+
+// Rate-limit defaults, used when the config carries zero.
+//
+// These match the defaults in internal/config; duplicated deliberately so
+// that a Server built with a hand-made Config -- which every test does --
+// behaves like a real one rather than being accidentally throttled to
+// 1/sec by ratelimit.New's own clamping.
+const (
+	// Inbox creations per IP per minute. Generous for a human, tight for a
+	// loop: the endpoint is unauthenticated by design.
+	defaultRateCreate = 10
+	// Captures per inbox per second. Well above any real provider's
+	// delivery rate for a single endpoint, so the limit should be invisible
+	// until something is genuinely wrong.
+	defaultRateCapture = 50
+)

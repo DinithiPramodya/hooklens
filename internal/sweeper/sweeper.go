@@ -41,6 +41,11 @@ type Sweeper struct {
 	log      *slog.Logger
 	interval time.Duration
 	batch    int
+	// onTick runs alongside the retention sweep. A func rather than an
+	// interface: the sweeper has exactly one extra job (evicting
+	// rate-limiter buckets) and does not need to know what it is. Nil is
+	// fine.
+	onTick func()
 }
 
 func New(st *store.Store, log *slog.Logger, interval time.Duration, batch int) *Sweeper {
@@ -97,6 +102,13 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 		}
 	}()
 
+	// Extra work first, and inside the recover above: it is cheap, it is
+	// in-memory, and running it before a potentially long database sweep
+	// means a slow database cannot starve it.
+	if s.onTick != nil {
+		s.onTick()
+	}
+
 	start := time.Now()
 	var total int64
 
@@ -129,3 +141,15 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 		s.log.Info("sweep complete", "deleted", total, "duration_ms", time.Since(start).Milliseconds())
 	}
 }
+
+// OnTick registers extra work to run on each sweep.
+//
+// Reusing the sweeper's existing timer rather than starting a second
+// goroutine: two tickers means two things to start, two to shut down, and
+// two chances to get the shutdown ordering wrong. This one already handles
+// cancellation and already recovers from a panic, and the extra work
+// inherits both.
+//
+// Not safe to call once Run has started, which is the same contract as the
+// setters in internal/ingest.
+func (s *Sweeper) OnTick(f func()) { s.onTick = f }

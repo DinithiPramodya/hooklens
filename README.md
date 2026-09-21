@@ -183,5 +183,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [28 — Structural diff: comparing trees, not text](docs/learn/28-structural-diff.md)
 - [29 — Mutations, and holding a secret in a browser](docs/learn/29-mutations-and-secrets.md)
 - [30 — Three flaky tests, and what each one actually was](docs/learn/30-diagnosing-flaky-tests.md)
+- [31 — Rate limiting: token buckets, and choosing what to count](docs/learn/31-rate-limiting.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).
