@@ -121,10 +121,19 @@ database round trip.*
 
 ---
 
+## Phase 6 — Launch
+
+*In progress.*
+
+| | Note | Covers |
+|---|---|---|
+| 36 | [The README as a product page](36-the-readme-as-a-product-page.md) | Ordering by the reader's questions, not the system's structure · time-to-first-success · why the demo outranks every paragraph · a status line that does not rot |
+
+---
+
 ## Still to come
 
-
-**Phase 6 — Launch.** The README as a product page, the demo, `DECISIONS.md`
+**The rest of Phase 6.** The demo GIF, `DECISIONS.md`
 (written by hand, from memory, per `CLAUDE.md`), and dogfooding: pointing real
 repository webhooks at a running instance and leaving it there.
 
