@@ -9,8 +9,9 @@ running on your laptop. Replay, diff, and provider-signature verification on top
 > retention schedule. The frontend is compiled into the binary and shows captures arriving
 > live over SSE, with a detail pane that renders JSON as a collapsible tree, headers with
 > duplicates intact, raw text, or a hex dump for binary. The tunnel protocol now has an
-> authenticated WebSocket handshake, and captured webhooks are forwarded down it to a
-> connected client, whose response is relayed back to the provider. The CLI itself is next.
+> authenticated WebSocket handshake, and `hooklens forward --to localhost:3000` now
+> delivers captures to a local app and relays its response back to the sender.
+> Reconnection and bounded concurrency are next.
 > See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
@@ -56,9 +57,30 @@ local development uses it.
 | `go run ./cmd/hooklens migrate up` | Apply pending migrations |
 | `go run ./cmd/hooklens migrate down` | Reverse one migration |
 | `go run ./cmd/hooklens migrate status` | Show applied and pending |
+| `go run ./cmd/hooklens forward --to localhost:3000` | Tunnel captures to a local app |
 
 Migrations are embedded in the binary, so `hooklens migrate up` works on a machine holding
 nothing but the executable.
+
+### Forwarding to a local app
+
+```
+$ hooklens forward --to localhost:3000
+
+  forwarding  http://632xap2u4zmm64zx3oqnxyhlzq.localhost/  ->  localhost:3000
+  inbox       632xap2u4zmm64zx3oqnxyhlzq
+  inspect     http://localhost:8080/
+```
+
+Anything sent to that URL is captured, then delivered to `localhost:3000`, and the local
+app's response — status, headers and body — goes back to the sender. The inbox is saved
+under the platform's user config directory (mode 0600, since it holds a token), so the
+**URL is the same every run**; pass `--new` to mint a fresh one, and `--server` or
+`HOOKLENS_SERVER` to point at a hosted instance.
+
+If the local app is not running, the sender still gets a 2xx and the capture is stored
+with `forward_error: unreachable` — a delivery failure must not make a provider retry or
+disable the endpoint.
 
 ## Configuration
 
@@ -146,5 +168,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [18 — WebSocket: an HTTP request that stops being HTTP](docs/learn/18-websockets.md)
 - [19 — Multiplexing and correlation: one connection, many requests](docs/learn/19-multiplexing-and-correlation.md)
 - [20 — Forwarding, and what the provider is told](docs/learn/20-forwarding.md)
+- [21 — The CLI: turning a frame back into an HTTP request](docs/learn/21-the-cli.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

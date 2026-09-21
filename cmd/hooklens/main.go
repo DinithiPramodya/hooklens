@@ -35,6 +35,17 @@ func main() {
 }
 
 func run() error {
+	// `forward` is dispatched BEFORE config.Load and before any signal
+	// handling that mentions the database, because it is the client half of
+	// the product: it runs on a developer's laptop, talks to a remote server,
+	// and has no business requiring a DATABASE_URL to be sensible. It gets its
+	// own signal context so ctrl-c stops it cleanly.
+	if args := os.Args[1:]; len(args) > 0 && args[0] == "forward" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runForward(ctx, args[1:])
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -50,9 +61,9 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Subcommand dispatch. Hand-rolled rather than a CLI library: there is one
-	// subcommand, and the default -- no arguments at all -- has to stay `serve`
-	// so the container ENTRYPOINT needs no arguments.
+	// Subcommand dispatch. Hand-rolled rather than a CLI library: there are
+	// three subcommands, and the default -- no arguments at all -- has to stay
+	// `serve` so the container ENTRYPOINT needs no arguments.
 	if args := os.Args[1:]; len(args) > 0 {
 		switch args[0] {
 		case "migrate":
@@ -60,7 +71,7 @@ func run() error {
 		case "serve":
 			// Explicit form of the default.
 		default:
-			return fmt.Errorf("unknown command %q (want serve or migrate)", args[0])
+			return fmt.Errorf("unknown command %q (want serve, migrate or forward)", args[0])
 		}
 	}
 

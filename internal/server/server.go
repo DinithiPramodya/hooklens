@@ -331,6 +331,19 @@ func summarise(r store.StoredRequest) map[string]any {
 	if r.SourceIP != nil {
 		m["source_ip"] = r.SourceIP.String()
 	}
+	// The forwarding outcome, omitted entirely when forwarding was never
+	// attempted. Absent and null mean different things to a client, and
+	// "no tunnel was connected" is better expressed by the field not being
+	// there than by a zero that looks like a real status.
+	if r.ForwardStatus != nil {
+		m["forward_status"] = *r.ForwardStatus
+	}
+	if r.ForwardError != nil {
+		m["forward_error"] = *r.ForwardError
+	}
+	if r.ForwardMS != nil {
+		m["forward_ms"] = *r.ForwardMS
+	}
 	return m
 }
 
