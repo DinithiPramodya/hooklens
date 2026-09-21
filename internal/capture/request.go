@@ -29,8 +29,13 @@ const DefaultMaxBody int64 = 1 << 20
 // the same name and HTTP allows exactly that. See the note in Order below for
 // what this does and does not preserve.
 type Header struct {
-	Name  string
-	Value string
+	// Tagged because this struct goes out over the API as-is. Untagged it
+	// would serialise as {"Name","Value"} -- the only capitalised keys in an
+	// otherwise snake_case API. The stored encoding is unaffected: the store
+	// marshals through its own headerJSON DTO precisely so the wire format and
+	// the storage format can move independently.
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // Request is everything we keep about one captured request.

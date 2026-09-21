@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { createInbox } from './lib/api'
 import { useLiveCaptures, useRequests, useStoredInbox } from './lib/useInbox'
+import { Detail } from './Detail'
 
 export default function App() {
   const { inbox, setInbox } = useStoredInbox()
@@ -8,6 +9,10 @@ export default function App() {
   const { data, isLoading, error } = useRequests(inbox)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  // Which row is open. The id, not the capture object -- the list is a cache
+  // that the stream rewrites, and holding a copy of a row here would mean two
+  // sources of truth for the same capture.
+  const [selected, setSelected] = useState<string | null>(null)
 
   async function onCreate() {
     setCreating(true)
@@ -52,7 +57,13 @@ export default function App() {
           <code className="url">/e/{inbox.slug}/</code>
           <span className={`dot dot-${status}`} aria-hidden="true" />
           <span className="muted">{status}</span>
-          <button className="link" onClick={() => setInbox(null)}>
+          <button
+            className="link"
+            onClick={() => {
+              setSelected(null)
+              setInbox(null)
+            }}
+          >
             forget
           </button>
         </div>
@@ -78,24 +89,38 @@ export default function App() {
           </p>
         )}
 
-        <ul className="captures">
-          {requests.map((r) => (
-            <li key={r.id}>
-              <span className={`method m-${r.method.toLowerCase()}`}>{r.method}</span>
-              <span className="path">
-                {r.path}
-                {r.query && <span className="muted">?{r.query}</span>}
-              </span>
-              <span className="muted size">
-                {r.body_size} B{r.body_truncated && ' (truncated)'}
-              </span>
-              <span className="muted when">{new Date(r.received_at).toLocaleTimeString()}</span>
-            </li>
-          ))}
-        </ul>
+        <div className="panes">
+          <ul className="captures">
+            {requests.map((r) => (
+              <li key={r.id} className={r.id === selected ? 'sel' : undefined}>
+                <button className="rowbtn" onClick={() => setSelected(r.id)}>
+                  <span className={`method m-${r.method.toLowerCase()}`}>{r.method}</span>
+                  <span className="path">
+                    {r.path}
+                    {r.query && <span className="muted">?{r.query}</span>}
+                  </span>
+                  <span className="muted size">
+                    {r.body_size} B{r.body_truncated && ' (truncated)'}
+                  </span>
+                  <span className="muted when">
+                    {new Date(r.received_at).toLocaleTimeString()}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          {/* Keyed by id so selecting a different capture MOUNTS A NEW Detail
+              rather than updating the old one. Without the key, React reuses
+              the component and its state -- so the tab you were on and every
+              expanded node in the tree would carry over onto an unrelated
+              request, showing one capture's open branches over another's
+              data. */}
+          {selected && inbox && <Detail key={selected} id={selected} inbox={inbox} />}
+        </div>
       </section>
 
-      <footer>Phase 2, unit 5 — the list is live. The detail pane lands in unit 16.</footer>
+      <footer>Phase 2 complete — list, live stream and detail pane.</footer>
     </main>
   )
 }

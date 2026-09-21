@@ -101,13 +101,32 @@ button:disabled { opacity: 0.6; cursor: default; }
 
 .captures { list-style: none; margin: 0.75rem 0 0; padding: 0; }
 .captures li {
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+/* The whole row is one button. Making the row itself clickable via an onClick
+   on the <li> would leave it unreachable by keyboard and invisible to a screen
+   reader; a button is focusable, activates on Enter and Space, and announces
+   itself, for free. */
+.rowbtn {
   display: grid;
   grid-template-columns: 3.5rem 1fr auto auto;
   gap: 0.75rem;
   align-items: baseline;
-  padding: 0.45rem 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  width: 100%;
+  padding: 0.45rem 0.4rem;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
   font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+.rowbtn:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+.captures li.sel .rowbtn {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .method {
   font-family: ui-monospace, monospace;
@@ -121,7 +140,86 @@ button:disabled { opacity: 0.6; cursor: default; }
 .path { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
 .size, .when { font-size: 0.8rem; white-space: nowrap; }
 
+/* ---- the detail pane ---- */
+
+.panes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
+@media (min-width: 60rem) {
+  /* minmax(0, …) rather than 1fr alone: a grid track's default minimum is
+     min-content, so one very long header value or unbroken JSON string would
+     push the track wider than the viewport and scroll the whole page
+     sideways. */
+  .panes { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); }
+}
+
+.detail {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+  border-radius: 6px;
+  padding: 0.85rem;
+}
+.dtitle { align-items: baseline; }
+.detail .meta { font-size: 0.8rem; margin: 0.35rem 0 0.6rem; }
+
+.tabs { display: flex; gap: 0.25rem; margin-bottom: 0.75rem; }
+.tab {
+  border: none; background: none; color: var(--muted);
+  padding: 0.25rem 0.6rem; border-radius: 4px;
+  font: inherit; font-size: 0.85rem; cursor: pointer;
+}
+.tab:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.tab.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--fg); }
+
+pre.raw {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  /* pre does not wrap by default, so a single long line would scroll the pane
+     horizontally. Wrapping anywhere is right for machine output: there are no
+     words to keep whole. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+table.headers { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+table.headers td { padding: 0.2rem 0.5rem 0.2rem 0; vertical-align: top; }
+.hname {
+  font-family: ui-monospace, monospace; color: var(--accent);
+  white-space: nowrap;
+}
+.hval { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+
+/* ---- the JSON tree ---- */
+
+.tree { font-family: ui-monospace, monospace; font-size: 0.82rem; line-height: 1.6; }
+.tnode { min-width: 0; }
+.t-children {
+  /* The indent is a left border, so the guide line is drawn by the same rule
+     that creates the offset -- nesting depth stays visible without a per-depth
+     style or an inline padding computed in JS. */
+  margin-left: 0.45rem;
+  padding-left: 0.7rem;
+  border-left: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+}
+.t-toggle {
+  display: inline-flex; align-items: baseline; gap: 0.15rem;
+  border: none; background: none; color: inherit;
+  font: inherit; padding: 0; cursor: pointer; text-align: left;
+}
+.t-toggle:hover { background: none; }
+.t-toggle:hover .t-key { text-decoration: underline; }
+.t-arrow { color: var(--muted); width: 0.9em; flex: none; }
+.t-closer { margin-left: 0.45rem; }
+.t-key { color: var(--accent); }
+.t-str { color: var(--ok); overflow-wrap: anywhere; }
+.t-num, .t-bool { color: var(--fg); font-weight: 600; }
+.t-null { color: var(--muted); font-style: italic; }
+.t-punct, .t-count { color: var(--muted); }
+.t-cap { color: var(--err); }
+
 @media (max-width: 34rem) {
-  .captures li { grid-template-columns: 3.5rem 1fr; }
+  .rowbtn { grid-template-columns: 3.5rem 1fr; }
   .size, .when { grid-column: 2; }
 }

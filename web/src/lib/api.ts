@@ -19,6 +19,21 @@ export type CaptureSummary = {
   source_ip?: string
 }
 
+export type Header = { name: string; value: string }
+
+/**
+ * One capture in full.
+ *
+ * The body arrives base64-encoded, not as a string, because it is `bytea` on
+ * the server: arbitrary bytes, often not valid UTF-8, and JSON strings must
+ * be. Decoding and deciding how to render is the client's job -- see
+ * `body.ts`.
+ */
+export type CaptureDetail = CaptureSummary & {
+  headers: Header[]
+  body_base64: string
+}
+
 export type Page = {
   inbox: string
   requests: CaptureSummary[]
@@ -76,6 +91,14 @@ export function listRequests(slug: string, token: string, after?: string): Promi
   return get<Page>(`/api/endpoints/${slug}/requests?${qs}`, token)
 }
 
+export function getRequest(id: string, token: string): Promise<CaptureDetail> {
+  // Note the shape: /api/requests/{id}, not /api/endpoints/{slug}/requests/{id}.
+  // The id is a UUIDv7 and the token authorises it, so the slug would be
+  // decoration -- and a second path segment the server would have to check
+  // agrees with the first, which is one more way to get authorisation wrong.
+  return get<CaptureDetail>(`/api/requests/${id}`, token)
+}
+
 /**
  * Query keys, in one place.
  *
@@ -85,4 +108,5 @@ export function listRequests(slug: string, token: string, after?: string): Promi
  */
 export const keys = {
   requests: (slug: string) => ['requests', slug] as const,
+  request: (id: string) => ['request', id] as const,
 }

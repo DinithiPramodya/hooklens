@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { keys, listRequests, type CaptureSummary, type Inbox, type Page } from './api'
+import { getRequest, keys, listRequests, type CaptureSummary, type Inbox, type Page } from './api'
 import { streamEvents } from './sse'
 
 const STORAGE_KEY = 'hooklens.inbox'
@@ -49,6 +49,24 @@ export function useRequests(inbox: Inbox | null) {
     // The stream keeps this current, so background refetching on focus or
     // reconnect is redundant chatter. The initial load is the only fetch we
     // actually need; everything after arrives by SSE.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  })
+}
+
+/**
+ * One capture in full, fetched on demand when a row is selected.
+ *
+ * `staleTime: Infinity` is not a tuning choice here, it is a fact about the
+ * data: a captured request is immutable. Once stored it never changes, so a
+ * cached copy can never go stale and refetching could only ever return the
+ * same bytes. This is the rare case where caching forever is simply correct.
+ */
+export function useRequest(id: string | null, inbox: Inbox | null) {
+  return useQuery({
+    queryKey: keys.request(id ?? ''),
+    queryFn: () => getRequest(id!, inbox!.token),
+    enabled: id !== null && inbox !== null,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
   })

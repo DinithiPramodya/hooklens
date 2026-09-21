@@ -53,15 +53,14 @@ last, after the domain question was settled.*
 | 13 | [Server-Sent Events](13-server-sent-events.md) | The wire format · why you must flush · reconnection and why we hand-rolled it · `Unwrap` and wrapped ResponseWriters |
 | 14 | [In-process pub/sub](14-pubsub.md) | Fan-out and why one channel will not do · the four answers to a slow consumer · why the send is under the lock |
 | 15 | [Server state, and TanStack Query](15-server-state.md) | Client vs server state · the query key is the cache identity · why setQueryData beats invalidate here |
-| 16 | Recursive rendering | The JSON tree and the detail pane |
+| 16 | [Recursive rendering](16-recursive-rendering.md) | Why a loop cannot render a tree · the depth cap and why a stack overflow is not catchable · collapsed children are absent, not hidden · `key` as a remount |
 
-**Quiz:** pending — written at the end of the phase.
+**Quiz:** [Phase 2](../QUIZ.md) — 10 questions.
 
 ---
 
 ## Still to come
 
-- **Phase 2 — the inspector UI:** `go:embed`, CORS, SSE, in-process pub/sub, recursive rendering
 - **Phase 3 — the tunnel:** NAT, WebSocket upgrade, multiplexing and correlation, goroutine leaks, backpressure
 - **Phase 4 — the wedge features:** hash functions, HMAC, timing attacks, replay windows, structural diff
 - **Phase 5 — hardening:** rate limiting, metrics, load testing, testcontainers, distribution
