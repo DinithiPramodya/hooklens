@@ -17,6 +17,13 @@ export type CaptureSummary = {
   received_at: string
   declared_size?: number
   source_ip?: string
+
+  // The forwarding outcome. All three are ABSENT -- not null -- when
+  // forwarding was never attempted, which is a third state distinct from
+  // success and failure. See docs/learn/25-showing-delivery.md.
+  forward_status?: number
+  forward_error?: string
+  forward_ms?: number
 }
 
 export type Header = { name: string; value: string }

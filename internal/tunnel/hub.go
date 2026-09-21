@@ -274,3 +274,19 @@ func (c *client) pendingCount() int {
 	defer c.mu.Unlock()
 	return len(c.pending)
 }
+
+// DropForTest severs an inbox's tunnel the way a network flap would: no
+// close frame, no warning.
+//
+// Exported because the acceptance test in internal/server needs to simulate
+// a drop and cannot reach unexported fields across packages. Named so that
+// nobody mistakes it for an operational control -- the real eviction paths
+// are register/unregister.
+func (h *Hub) DropForTest(endpointID string) {
+	h.mu.Lock()
+	c := h.clients[endpointID]
+	h.mu.Unlock()
+	if c != nil {
+		c.conn.CloseNow()
+	}
+}

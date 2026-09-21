@@ -4,7 +4,7 @@ A webhook inspector with a self-hosted tunnel. It gives you a public URL, captur
 request sent to it byte-for-byte, streams them to a web UI, and forwards them to code
 running on your laptop. Replay, diff, and provider-signature verification on top.
 
-> **Status: Phase 3 of 6 in progress — the tunnel is being built.** Requests are captured, stored
+> **Status: Phase 3 of 6 complete — the tunnel works.** Requests are captured, stored
 > byte-for-byte, authenticated with per-inbox tokens, paginated by cursor, and expired on a
 > retention schedule. The frontend is compiled into the binary and shows captures arriving
 > live over SSE, with a detail pane that renders JSON as a collapsible tree, headers with
@@ -12,7 +12,8 @@ running on your laptop. Replay, diff, and provider-signature verification on top
 > authenticated WebSocket handshake, and `hooklens forward --to localhost:3000` delivers
 > captures to a local app, relays its response back to the sender, and reconnects with
 > exponential backoff and jitter on the same URL. In-flight forwards are bounded per
-> tunnel. Large bodies and the three-terminal test close out the phase.
+> tunnel, oversized bodies are refused rather than silently truncated, and the UI shows
+> whether each capture actually reached your app. Signature verification is Phase 4.
 > See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
@@ -173,5 +174,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [22 — Exponential backoff, jitter, and the thundering herd](docs/learn/22-backoff-and-jitter.md)
 - [23 — Semaphores, bounded concurrency, and backpressure](docs/learn/23-bounded-concurrency.md)
 - [24 — Size limits at every boundary](docs/learn/24-size-limits.md)
+- [25 — Showing delivery: three states, not two](docs/learn/25-showing-delivery.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

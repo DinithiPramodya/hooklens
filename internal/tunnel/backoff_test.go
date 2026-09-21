@@ -171,9 +171,12 @@ func TestSleepCompletes(t *testing.T) {
 // failure and the CLI busy-waits against an auth endpoint, treat a transient
 // one as permanent and it gives up on a server that was merely restarting.
 func TestCloseErrorPermanence(t *testing.T) {
-	permanent := []string{CodeUnauthorized, CodeVersion}
+	// CodeReplaced is permanent for a different reason than the other two:
+	// not "the client is wrong" but "reconnecting starts a fight". Two CLIs
+	// on one inbox would evict each other forever.
+	permanent := []string{CodeUnauthorized, CodeVersion, CodeReplaced}
 	transient := []string{
-		CodeServerShutdown, CodeReplaced, CodeMalformed, CodeHandshake, "unknown", "",
+		CodeServerShutdown, CodeMalformed, CodeHandshake, "unknown", "",
 	}
 
 	for _, code := range permanent {

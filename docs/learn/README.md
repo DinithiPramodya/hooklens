@@ -61,8 +61,7 @@ last, after the domain question was settled.*
 
 ## Phase 3 — The tunnel
 
-*In progress. This is the deep one: the concepts here are the ones the whole project is
-built to demonstrate.*
+*The deep one: the concepts here are the ones the whole project is built to demonstrate.*
 
 | | Note | Covers |
 |---|---|---|
@@ -74,8 +73,9 @@ built to demonstrate.*
 | 22 | [Backoff and jitter](22-backoff-and-jitter.md) | Why a fixed retry delay causes the outage it is recovering from · exponential fixes rate, jitter fixes synchronisation · resetting on connect is a bug · what must never be retried |
 | 23 | [Bounded concurrency](23-bounded-concurrency.md) | A semaphore is a buffered channel · wait vs reject vs drop · a bounded worker count with an unbounded queue is not bounded · never acquire on the path that must stay responsive |
 | 24 | [Size limits](24-size-limits.md) | Truncation is a corrupt payload that looks complete · a frame limit is not a body limit · why base64 arithmetic closed the tunnel · limits that cannot be raised are bugs |
+| 25 | [Showing delivery](25-showing-delivery.md) | Three states, not two · why "not attempted" must not look like failure · an app 500 is not a delivery failure · the livelock two CLIs caused |
 
-**Quiz:** pending — written at the end of the phase.
+**Quiz:** [Phase 3](../QUIZ.md) — 18 questions.
 
 ---
 

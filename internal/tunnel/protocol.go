@@ -169,6 +169,25 @@ func (e *CloseError) Permanent() bool {
 	switch e.Code {
 	case CodeUnauthorized, CodeVersion:
 		return true
+
+	case CodeReplaced:
+		// Added after the acceptance test in internal/server hung forever.
+		//
+		// Reconnecting here does not recover anything, it starts a FIGHT.
+		// Two CLIs forwarding one inbox each receive `replaced`, each
+		// immediately reconnects, each evicts the other, and neither ever
+		// delivers reliably -- a livelock that consumes both machines and
+		// looks, from the outside, like a flapping tunnel.
+		//
+		// Note this does NOT affect the network-flap case, which is the one
+		// reconnection exists for: there is only one CLI process there, and
+		// the connection it displaces on reconnect is a dead socket with
+		// nobody reading it.
+		//
+		// So: whoever was replaced stops and says so. The user started a
+		// second client deliberately; the first should get out of the way.
+		return true
+
 	default:
 		return false
 	}

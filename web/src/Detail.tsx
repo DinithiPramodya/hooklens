@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import type { CaptureDetail, Inbox } from './lib/api'
 import { classifyBody, decodeBase64, formatBytes, hexDump } from './lib/body'
 import { useRequest } from './lib/useInbox'
+import { deliveryOf, formatMs } from './lib/delivery'
 import { JsonTree } from './JsonTree'
 
 type Tab = 'body' | 'headers' | 'raw'
@@ -40,6 +41,9 @@ export function Detail({ id, inbox }: { id: string; inbox: Inbox }) {
             ` — the sender declared ${formatBytes(data.declared_size)}`}
         </p>
       )}
+
+
+      <Delivery capture={data} />
 
       <div className="tabs" role="tablist">
         {(['body', 'headers', 'raw'] as Tab[]).map((t) => (
@@ -133,4 +137,49 @@ function Raw({ req }: { req: CaptureDetail }) {
   }, [req])
 
   return <pre className="raw">{text}</pre>
+}
+
+/**
+ * Did this reach the developer's app?
+ *
+ * The question the tunnel exists to answer, and separate from "was this
+ * captured" -- a capture can be stored perfectly and never delivered. See
+ * docs/learn/25-showing-delivery.md.
+ */
+function Delivery({ capture }: { capture: CaptureDetail }) {
+  const d = deliveryOf(capture)
+
+  if (d.kind === 'none') {
+    return (
+      <p className="muted delivery">
+        not forwarded — no tunnel was connected when this arrived
+      </p>
+    )
+  }
+
+  if (d.kind === 'delivered') {
+    // A 4xx or 5xx here is the APP's answer, not a delivery failure. Saying
+    // "delivered" alongside it is the distinction unit 20 exists for: the
+    // request reached the handler, and the handler said no.
+    const appFailed = d.status >= 400
+    return (
+      <p className={appFailed ? 'delivery warn' : 'delivery ok'}>
+        delivered — your app answered <strong>{d.status}</strong>
+        {d.ms !== undefined && <span className="muted"> in {formatMs(d.ms)}</span>}
+        {appFailed && (
+          <span className="muted"> (that is your app's response, not a delivery failure)</span>
+        )}
+      </p>
+    )
+  }
+
+  return (
+    <div className="delivery fail">
+      <p>
+        <strong>{d.label}</strong>
+        {d.ms !== undefined && d.ms > 0 && <span className="muted"> after {formatMs(d.ms)}</span>}
+      </p>
+      <p className="muted">{d.detail}</p>
+    </div>
+  )
 }

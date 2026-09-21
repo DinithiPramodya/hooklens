@@ -13,6 +13,7 @@ without looking, then check.
 | 0 — Skeleton and a live URL | [01](learn/01-webhooks-and-http.md) · [02](learn/02-containers.md) · [03](learn/03-migrations.md) · [04](learn/04-ci.md) · [05](learn/05-dns-and-tls.md) | [below](#phase-0--skeleton-and-a-live-url) |
 | 1 — The mailbox | [06](learn/06-reading-a-request.md) · [07](learn/07-storing-a-request.md) · [08](learn/08-capability-urls.md) · [09](learn/09-pagination.md) · [10](learn/10-background-workers.md) | [below](#phase-1--the-mailbox) |
 | 2 — The inspector UI | [11](learn/11-spa-and-go-embed.md) · [12](learn/12-cors.md) · [13](learn/13-server-sent-events.md) · [14](learn/14-pubsub.md) · [15](learn/15-server-state.md) · [16](learn/16-recursive-rendering.md) | [below](#phase-2--the-inspector-ui) |
+| 3 — The tunnel | [17](learn/17-nat-and-firewalls.md) · [18](learn/18-websockets.md) · [19](learn/19-multiplexing-and-correlation.md) · [20](learn/20-forwarding.md) · [21](learn/21-the-cli.md) · [22](learn/22-backoff-and-jitter.md) · [23](learn/23-bounded-concurrency.md) · [24](learn/24-size-limits.md) · [25](learn/25-showing-delivery.md) | below |
 
 ---
 
@@ -1071,3 +1072,348 @@ raw view still showed all 1808 bytes.
 The same reasoning, one level down, applies to breadth: collapsed children are **not
 rendered at all** rather than hidden with CSS, because `display: none` costs exactly as
 much rendering as showing them and so fixes the scrolling while leaving the cost intact.
+
+---
+
+# Phase 3 — the tunnel
+
+*Set 2026-09-21. Material: notes [17](learn/17-nat-and-firewalls.md) through
+[25](learn/25-showing-delivery.md).*
+
+> **These are model answers, not recall.** As with Phases 1 and 2. This is the phase the
+> project exists to demonstrate, so these are the questions most likely to be asked —
+> cover the answers, work through them cold, and compare.
+
+---
+
+## Q1. A provider cannot open a connection to your laptop. Explain precisely why — not "because of NAT", but what the router is actually unable to do. Then explain why your laptop *can* open one outward.
+
+The router holds a **translation table**, and every row in it is created by an *outbound*
+packet. When your laptop dials out, the router picks a spare port on its public address
+and records: this private address and port, talking to that destination, is now this
+public port. Replies matching the row are rewritten back and delivered inward.
+
+An inbound packet that matches no row is not *refused as policy* — the router genuinely
+**has no information** about which of the twenty devices behind it the packet is for. The
+private addresses are not unique; `192.168.1.47` describes millions of machines. So the
+packet is dropped because there is no possible correct action, not because someone
+configured a rule.
+
+The asymmetry is therefore not a security feature bolted on, it is a consequence of how
+address sharing works.
+
+**A refinement worth knowing**, because the development machine showed both at once: NAT
+is not the *only* thing preventing inbound, it is the unavoidable one. On IPv6 the same
+laptop had a globally routable address — no NAT, since there are enough addresses. The
+blocker there is a **stateful firewall**, which tracks connections the same way but
+without rewriting addresses. Different mechanism, same outcome, same consequence for us.
+
+## Q2. Your CLI dials out and holds a WebSocket open. What does "holding it open" cost, and what will kill it if you do nothing?
+
+It costs a socket and a file descriptor at each end, a row in every NAT table and stateful
+firewall on the path, and a goroutine or two — all small, all bounded, none of which is
+the problem.
+
+What kills it is **idle timeouts you cannot see**. Translation rows expire: a connection
+that goes quiet has its row reclaimed, and once it is gone, packets on that connection
+have nowhere to go. The timeouts are not advertised and vary from around 30 seconds on
+some mobile carriers to hours elsewhere. You cannot query them, so you must assume the
+worst and generate traffic yourself.
+
+Hence an application-level ping every 20 seconds. Protocol-level ping/pong exists in
+WebSocket, and we use it — `Conn.Ping` waits for the pong, so one call is both the
+keepalive and the liveness check — but the general lesson is that *something* must keep
+the connection warm, and the interval has to sit under the shortest plausible reaper.
+
+## Q3. Walk the WebSocket handshake. Then explain what `Sec-WebSocket-Accept` proves, and what the client-to-server masking is for — neither is what the name suggests.
+
+The handshake is an ordinary HTTP `GET` carrying `Upgrade: websocket`,
+`Connection: Upgrade`, `Sec-WebSocket-Version: 13` and a `Sec-WebSocket-Key` of 16 random
+bytes, base64'd. The server answers `101 Switching Protocols` with `Sec-WebSocket-Accept`.
+After the 101 the **same TCP connection** stays open and the bytes on it are no longer
+HTTP — they are frames.
+
+`Sec-WebSocket-Accept` is base64(SHA-1(key + a fixed GUID from the spec)). It is **not
+security**: the GUID is public and the key travels in the clear. It proves the peer
+actually *understood* the handshake, rather than being a cache or a naive proxy replaying
+a stored 101 it did not comprehend.
+
+**Masking** is also not secrecy — the key is in the frame. Client-to-server payloads are
+XOR-masked so that a malicious web page cannot craft payload bytes an intermediary proxy
+would misread as a second HTTP request. That is a cache-poisoning attack, and it was
+demonstrated against earlier drafts of the protocol.
+
+One level down: all of this works because **TCP is just an ordered byte stream with no
+notion of a request**. HTTP is a convention on top; the upgrade is both sides agreeing to
+stop using that convention and use another one on the same stream. Nothing reconnects.
+
+## Q4. Why WebSocket for the tunnel but SSE for the browser? Defend both, then say when you would change either.
+
+The tunnel is genuinely **bidirectional**: the server pushes `request` frames when a
+webhook lands, the CLI answers with `response` frames. SSE cannot do that — the channel is
+one-directional by construction. The alternative, SSE downward plus POSTs upward, means
+correlating two separate transports, which is strictly more machinery than one connection
+carrying both directions.
+
+The browser only ever **receives**; it takes actions over plain REST. SSE gives it
+automatic reconnection for free, is trivially debuggable with `curl`, and is one less
+protocol in the system.
+
+*Change the browser to WebSocket* if it needed to push — a "replay this request" button
+could go over REST, so probably still not. *Change the tunnel* to something else if
+bodies grew beyond memory: message framing is only right because bodies are already
+fully buffered (we have to read them to store them). For streaming, per-request streams
+— yamux or HTTP/2 — start to earn their complexity.
+
+## Q5. One connection carries many concurrent requests. Describe the correlation pattern, then name the three bugs that pattern has and what each one does.
+
+Every forwarded request gets an id. The sender creates a channel, stores it in a
+`map[id]chan *Response` under a mutex, writes the frame, and blocks receiving. The
+connection's **single** reader goroutine reads a response, looks up the id, and sends on
+that channel. The blocked sender wakes.
+
+The three bugs, all variations on "something was added to the map and never removed":
+
+1. **A missed delete.** `send` has five exit paths — encode error, write error, response,
+   disconnect, timeout. Attaching cleanup to the successful one leaks a channel and a map
+   entry per request that takes any other. Fix: `defer forget(id)` at the moment of
+   registration, not at the end.
+2. **An unbuffered response channel.** If a caller gives up at its deadline and walks
+   away, the reader delivering a late response blocks forever — and it is the *only*
+   reader for the connection, so **one abandoned response freezes every other request on
+   that tunnel**. Fix: buffer of one.
+3. **A duplicate id.** A buggy or hostile client echoing one `req_id` twice produces two
+   sends competing for one buffer slot, which is the same freeze by another route. Fix:
+   `deliver` takes *and removes* the entry under one lock, so the second lookup misses.
+
+## Q6. Why a mutex and not a manager goroutine owning the map? Go's idiom says "share memory by communicating".
+
+The communicating version works: one goroutine owns the map, registration and lookup
+arrive as messages. It is slower and longer — every lookup becomes a round trip through
+another goroutine — for state that is genuinely just a map with microsecond critical
+sections.
+
+The idiom exists to stop people sharing *complicated* mutable state where the invariants
+are hard to hold under a lock. This is not that. Knowing *why* the idiom does not apply
+matters more than the idiom.
+
+It would flip if the registry grew behaviour — expiry, quotas, ordered fairness — at which
+point a goroutine that owns the state and can run its own timers becomes the simpler
+thing.
+
+## Q7. A webhook arrives and the developer's laptop is asleep. Trace exactly what the provider receives, and justify every part of it.
+
+The capture is read, stored, and **durable**. Then forwarding is attempted and fails with
+`ErrNoTunnel`. The provider receives **200**, with `X-Hooklens-Forward: no_tunnel` and
+`X-Hooklens-Id`, and the capture is recorded with `forward_error = 'no_tunnel'`.
+
+Why 200 and not 502: a provider reads any non-2xx as "not delivered" and retries. We have
+the event. A non-2xx would produce a **duplicate of an event we already hold** — the Phase
+0 quiz Q1 bug. That constraint is why forwarding sits below the durability line and why
+`forward()` returns a decision rather than an `error`: an error return invites a caller to
+turn it into a status, so the failure path is made unrepresentable rather than merely
+avoided.
+
+Why this is not dishonest: the provider's question is "did you receive this event", and
+the answer is yes. Whether it reached a laptop is not the provider's business, and telling
+it otherwise would make it back off and eventually disable the endpoint because somebody
+closed a lid.
+
+## Q8. Distinguish the four ways a forward can fail, and say why collapsing any two of them is a bug.
+
+- **`no_tunnel`** — no CLI connected. The normal state of an inspection-only inbox, not a
+  fault.
+- **`unreachable`** — the CLI is connected but the local app refused the connection. The
+  app is not running.
+- **`timeout`** — the app was reached and did not answer in time. The handler is slow or
+  hung.
+- **`overloaded`** — the tunnel was at its in-flight limit and no slot came free. **We
+  never asked the app at all.**
+
+Plus `too_large` (the body was truncated, so we refused to forward corrupt bytes) and
+`disconnected` (the tunnel died mid-flight).
+
+Each collapse sends a developer to the wrong place. `timeout` merged with `overloaded`
+makes them debug a handler that never ran. `unreachable` merged with an app 500 makes
+them debug code that is not running. And a delivery failure merged with an application
+failure is the worst of all — it is the difference between "your app is broken" and "your
+app is not started", which are opposite actions.
+
+This is also why `tunnel.Response` carries `Error` separately from `Status`, and why
+`callLocal` never returns a Go error: the distinction has to survive every layer.
+
+## Q9. A tunnel drops with five requests in flight. What must happen, how fast, and how is it implemented?
+
+Every blocked caller must be woken **immediately** — not at its deadline. Otherwise five
+providers hold connections open for up to thirty seconds each, waiting for an answer that
+provably cannot arrive.
+
+Implementation: each client has a `done` channel, closed exactly once when the connection
+dies, and every waiter selects on `{response, done, ctx.Done()}`. Closing is O(1)
+regardless of how many are waiting, because **closing a channel is a broadcast**.
+
+Why `done` rather than closing each pending response channel: a receive from a closed
+channel yields a nil `*Response`, and the caller could not distinguish "disconnected" from
+"the CLI sent nothing". A separate channel keeps them distinguishable.
+
+The test is written so a wrong implementation is *slow* rather than merely incorrect: the
+callers' deadline is 30 seconds, so an implementation that let them time out would take
+30s to fail instead of milliseconds.
+
+## Q10. Exponential backoff alone does not fix the thundering herd. Explain what it does fix, what it does not, and why jitter helps — in terms of queueing, not "it spreads them out".
+
+Exponential backoff fixes **rate**. A client failing for an hour asks occasionally rather
+than sixty times a minute.
+
+It does not fix **synchronisation**. Clients that failed together — which is what a server
+restart produces — back off together and therefore arrive together. The waves simply get
+further apart.
+
+Why jitter helps, stated properly: the problem was never the average rate. Ten thousand
+clients retrying every five seconds is two thousand per second, which is nothing. The
+problem is that identical timers turn those clients into a **periodic impulse** — all the
+load in a few milliseconds, none for the rest of the window. **Queues fail on peaks, not
+averages.** Jitter converts the impulse train into a roughly uniform arrival process with
+the same mean and a vastly lower peak.
+
+Full jitter — a uniform draw in `[0, ceiling)` rather than the ceiling itself — spreads
+arrivals across the whole window and has the best published simulation results. Equal
+jitter still concentrates them in the back half.
+
+## Q11. Where do you reset the backoff counter, and why is the obvious place wrong?
+
+The obvious place is on a successful connection. It is wrong: a server that accepts and
+**immediately drops** produces a tight reconnect loop in which every attempt technically
+succeeded, so the counter never grows, the backoff never engages, and the herd never
+disperses. You have written a hot loop that looks like a retry policy.
+
+The counter resets only after a session that **lasted** — 30 seconds here. Only a
+genuinely working connection clears it.
+
+## Q12. Which failures must never be retried, and why is `replaced` the interesting one?
+
+`unauthorized` and `unsupported_version` describe the **client being wrong**. No amount of
+waiting changes that, and retrying is a busy-wait that also looks like a credential attack
+from the server's side.
+
+`replaced` is permanent for a completely different reason, and it was found by a test that
+**hung rather than failed**. It is not the client's fault at all. But two CLIs forwarding
+one inbox each receive `replaced`, each immediately reconnects, each evicts the other —
+a **livelock** in which neither ever delivers reliably and both machines stay busy. From
+the outside it looks like a flapping tunnel.
+
+The subtlety worth stating: the network-flap case, which is the entire reason reconnection
+exists, looks *identical at the protocol level* and is completely different in practice.
+There is only one CLI process, and the connection it displaces on reconnect is a dead
+socket with nobody reading it. No second reader, no fight.
+
+So the classification cannot be derived from "whose fault is it" — it has to be derived
+from "does retrying accomplish anything".
+
+Everything else defaults to retryable, because being wrong in that direction costs a few
+seconds while being wrong in the other gives up on a server that was restarting.
+
+## Q13. Why is the concurrency bound taken inside the per-request goroutine rather than in the read loop? What breaks if you move it one line up?
+
+Because the read loop must never wait on anything.
+
+A WebSocket's control frames — including the **pong** answering the server's keepalive —
+are only processed while a read is in flight. Acquire the semaphore in the read loop and
+it blocks whenever the local app is busy; control frames stop being processed; the
+server's ping times out; the server concludes the CLI is dead and drops the tunnel.
+
+So a slow handler becomes an outage, and the error names a keepalive rather than the
+handler that caused it.
+
+Same rule as the broker in Phase 2: the path that must stay responsive never waits. There,
+`Publish` uses a non-blocking send so a backgrounded browser tab cannot stall a provider's
+request. Different component, identical constraint.
+
+## Q14. "A bounded worker count with an unbounded queue is not bounded." Explain, and say what bounds the queue here.
+
+Capping concurrent workers at 32 while letting an arbitrary number of callers wait to
+become one of those 32 has not bounded anything — it has moved the unboundedness from
+goroutines into the queue, where it is less visible. Memory still grows with load; it just
+grows somewhere you are not looking.
+
+Here the queue is bounded by **the caller's deadline**: `acquire` selects on `ctx.Done()`,
+so a caller that cannot get a slot in time leaves and records `overloaded`. The wait is
+finite by construction.
+
+That is also why waiting is the right backpressure choice *here specifically*: the
+producer (the ingest handler) is already blocked on the provider, and a deadline already
+exists. If the queue were genuinely unbounded, fast rejection would be the honest answer
+instead, because accepting work you cannot get to is a lie.
+
+## Q15. A 50MB webhook arrives. Trace what happens at every boundary, and justify the decision that is most likely to be argued with.
+
+`io.LimitReader(body, max+1)` keeps the first 1 MB — the `+1` being the probe that
+distinguishes "exactly at the limit" from "over it". The row is stored with
+`body_truncated = true`, `body_size = 1MB` and the sender's declared size for comparison.
+
+Then the arguable decision: **it is not forwarded.** `forward_error = 'too_large'`, and
+the provider gets its 200.
+
+Forwarding what we kept is what a proxy naturally does, and it delivers a payload that is
+corrupt but **looks complete**. The handler's JSON parse fails and blames the sender; a
+signature verifier fails and blames the secret. Neither message mentions truncation,
+because nothing said truncation happened. Refusing costs exactly one case — a handler that
+tolerates partial bodies — and is better for every other. Nothing is lost for inspection,
+which is what makes refusing cheap, and the escape hatch is `HOOKLENS_MAX_BODY`.
+
+## Q16. You have a body limit of 1MB and a WebSocket read limit of 2MB. A 2MB response from a local app takes the whole tunnel down. Why?
+
+Because a body travels **base64-encoded**, which is four bytes for every three. Reading up
+to the 2 MB *frame* limit and then encoding produces a 2.79 MB frame, over the peer's
+2 MB read limit — and a read-limit violation does not skip a message, it **closes the
+connection**. So one large response drops the tunnel and every unrelated request in flight
+on it, reporting a read limit rather than the response that caused it.
+
+The general lesson: **limits at different layers measure different things** — raw bytes,
+encoded bytes, the whole frame including JSON and headers. Comparing them without
+converting is how this happens. `maxFrameBytes` is now derived from `maxBodyBytes` with
+the expansion applied plus slack for headers, and a test asserts the inequality, because
+the next person to tune one of those constants will not re-derive it.
+
+## Q17. Your status UI has "delivered" and "failed". What is missing, and what does each possible mistake look like to a user?
+
+**Not attempted** — no tunnel was connected — which is the most common state, not an edge
+case.
+
+Render it as a failure and every inbox used purely for inspection shows a wall of red for
+working exactly as designed. Render it as success and a developer whose CLI quietly died
+sees green while nothing is being delivered. Both are the interface lying, in opposite
+directions.
+
+This is why the fields are nullable in the database and **omitted** rather than null in
+the API: *absent*, *present-and-good* and *present-and-bad* are three distinguishable
+things at every layer, and each layer that flattens them makes the layer above guess.
+
+A fourth distinction sits inside "delivered": an app 4xx or 5xx means the request
+**reached the handler and the handler said no**. Styling it identically to a delivery
+failure sends the developer to check their tunnel when the problem is in their own code —
+so the detail pane says it in words.
+
+## Q18. Your acceptance test hangs instead of failing. What does that tell you before you have read any code, and how would you narrow it down?
+
+That something is waiting on something that will never happen — a deadlock, a livelock, or
+a missing wakeup — rather than computing a wrong answer. A wrong answer fails fast; a
+missing wakeup waits forever.
+
+The narrowing that worked here:
+
+- **It passed alone and hung in combination**, which points at ordering and shared state
+  rather than at logic.
+- **It hung rather than spinning at 0% CPU or 100%** — a livelock burns CPU, a deadlock
+  does not. This one had both machines busy, which said "livelock", which said "two things
+  are undoing each other".
+- Then: what is shared? One slug. What acts on it? Registration. What did registration do
+  recently? Evict.
+
+Two earlier bugs in this phase had the same shape and were found the same way. In unit 19,
+`ErrTimeout` rather than `ErrNoTunnel` was the whole diagnosis — the registry was *right*,
+so the problem was downstream of it. And a test-isolation failure in unit 22 passed alone,
+passed under `-race`, and failed only in a full run.
+
+The general habit: before reading code, work out what the *shape* of the failure rules
+out.

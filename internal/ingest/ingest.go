@@ -204,9 +204,11 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 		// point of the tunnel.
 		h.log.Info("forwarded", "id", id, "inbox", slug,
 			"status", fo.resp.Status, "ms", fo.out.Elapsed)
-		writeForwarded(w, fo.resp)
+		writeForwarded(w, fo.resp, id)
 		return
 	}
+
+	w.Header().Set("X-Hooklens-Id", id)
 
 	// Either there is no tunnel, or delivery failed. The provider gets a
 	// success either way, because the capture IS stored and a non-2xx would
@@ -397,7 +399,7 @@ func toTunnelHeaders(hs []capture.Header) []tunnel.Header {
 //
 // Status, headers and body come from the developer's application, which is the
 // entire point: they must be able to test what their handler actually returns.
-func writeForwarded(w http.ResponseWriter, resp *tunnel.Response) {
+func writeForwarded(w http.ResponseWriter, resp *tunnel.Response, captureID string) {
 	body, err := base64.StdEncoding.DecodeString(resp.BodyB64)
 	if err != nil {
 		// A malformed body from our own CLI. Relay the status anyway rather
@@ -414,6 +416,10 @@ func writeForwarded(w http.ResponseWriter, resp *tunnel.Response) {
 		w.Header().Add(hdr.Name, hdr.Value)
 	}
 	w.Header().Set("X-Hooklens-Forward", "delivered")
+	// The capture id, because on a successful forward the BODY belongs to the
+	// developer's app -- so this header is the only way anything downstream can
+	// correlate the response it received with the capture we stored.
+	w.Header().Set("X-Hooklens-Id", captureID)
 	status := resp.Status
 	if status < 100 || status > 599 {
 		// A CLI that sent nonsense must not make us panic in WriteHeader.

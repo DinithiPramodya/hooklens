@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -293,18 +292,19 @@ func TestForwardTimeoutStillCapturesAndRecords(t *testing.T) {
 	}
 }
 
+// capturedID reads the capture id from the response HEADER, not the body.
+//
+// On a successful forward the body belongs to the developer's app, so there
+// is no hooklens JSON to parse -- which is exactly why X-Hooklens-Id exists.
+// Reading the body worked for every test written before forwarding landed
+// and broke silently the moment one asserted on a delivered capture.
 func capturedID(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	var body struct {
-		ID string `json:"id"`
+	if id := resp.Header.Get("X-Hooklens-Id"); id != "" {
+		return id
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode capture response: %v", err)
-	}
-	if body.ID == "" {
-		t.Fatal("capture response carried no id")
-	}
-	return body.ID
+	t.Fatal("no X-Hooklens-Id on the capture response")
+	return ""
 }
 
 func fetchRequest(t *testing.T, s *Server, id string) *store.StoredRequest {

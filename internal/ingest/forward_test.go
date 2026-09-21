@@ -82,7 +82,7 @@ func TestWriteForwardedRelaysVerbatim(t *testing.T) {
 			{Name: "Content-Length", Value: "999"},
 		},
 		BodyB64: "eyJlcnJvciI6ImJhZCJ9", // {"error":"bad"}
-	})
+	}, "capture-123")
 
 	resp := rec.Result()
 	defer resp.Body.Close()
@@ -115,7 +115,7 @@ func TestWriteForwardedRelaysVerbatim(t *testing.T) {
 func TestWriteForwardedRejectsNonsenseStatus(t *testing.T) {
 	for _, status := range []int{0, 99, 600, -1} {
 		rec := httptest.NewRecorder()
-		writeForwarded(rec, &tunnel.Response{Status: status})
+		writeForwarded(rec, &tunnel.Response{Status: status}, "id-1")
 		if got := rec.Result().StatusCode; got != 502 {
 			t.Errorf("status %d relayed as %d, want 502", status, got)
 		}
@@ -126,11 +126,22 @@ func TestWriteForwardedRejectsNonsenseStatus(t *testing.T) {
 // the status rather than failing. The status is the part a provider acts on.
 func TestWriteForwardedSurvivesBadBase64(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeForwarded(rec, &tunnel.Response{Status: 200, BodyB64: "!!!not base64!!!"})
+	writeForwarded(rec, &tunnel.Response{Status: 200, BodyB64: "!!!not base64!!!"}, "id-1")
 	if got := rec.Result().StatusCode; got != 200 {
 		t.Errorf("status = %d, want 200", got)
 	}
 	if got := rec.Body.Len(); got != 0 {
 		t.Errorf("body = %d bytes, want empty", got)
+	}
+}
+
+// TestWriteForwardedCarriesCaptureID: on a successful forward the body
+// belongs to the developer's app, so this header is the only way anything
+// downstream can correlate the response with the capture we stored.
+func TestWriteForwardedCarriesCaptureID(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeForwarded(rec, &tunnel.Response{Status: 200}, "abc-123")
+	if got := rec.Result().Header.Get("X-Hooklens-Id"); got != "abc-123" {
+		t.Errorf("X-Hooklens-Id = %q, want the capture id", got)
 	}
 }

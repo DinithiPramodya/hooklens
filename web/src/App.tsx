@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { createInbox } from './lib/api'
+import { createInbox, type CaptureSummary } from './lib/api'
 import { useLiveCaptures, useRequests, useStoredInbox } from './lib/useInbox'
 import { Detail } from './Detail'
+import { deliveryBadge, deliveryOf } from './lib/delivery'
 
 export default function App() {
   const { inbox, setInbox } = useStoredInbox()
@@ -48,6 +49,12 @@ export default function App() {
 
   const requests = data?.requests ?? []
 
+  // Derived from the most recent capture rather than from a live signal,
+  // because there is no "is a tunnel attached" endpoint -- and adding one
+  // would be a second source of truth that could disagree with the rows.
+  // The newest capture is the freshest evidence available.
+  const noTunnel = requests.length > 0 && deliveryOf(requests[0]).kind === 'none'
+
   return (
     <main>
       <Header />
@@ -89,6 +96,16 @@ export default function App() {
           </p>
         )}
 
+        {/* Said once, not on every row. "No tunnel" is the normal state of an
+            inbox used for inspection, so repeating it per capture would paint
+            a working system as broken. */}
+        {noTunnel && (
+          <p className="muted notice">
+            captures are being stored but not forwarded — run{' '}
+            <code>hooklens forward --to localhost:3000</code> to deliver them to a local app
+          </p>
+        )}
+
         <div className="panes">
           <ul className="captures">
             {requests.map((r) => (
@@ -102,6 +119,7 @@ export default function App() {
                   <span className="muted size">
                     {r.body_size} B{r.body_truncated && ' (truncated)'}
                   </span>
+                  <DeliveryBadge capture={r} />
                   <span className="muted when">
                     {new Date(r.received_at).toLocaleTimeString()}
                   </span>
@@ -120,7 +138,7 @@ export default function App() {
         </div>
       </section>
 
-      <footer>Phase 2 complete — list, live stream and detail pane.</footer>
+      <footer>Phase 3 — captures, live stream, detail pane and tunnel delivery.</footer>
     </main>
   )
 }
@@ -134,4 +152,17 @@ function Header() {
       </p>
     </>
   )
+}
+
+/**
+ * The per-row delivery indicator.
+ *
+ * Renders nothing at all when forwarding was never attempted. An inbox with
+ * no tunnel would otherwise repeat the same notice on every line; it is said
+ * once, above the list.
+ */
+function DeliveryBadge({ capture }: { capture: CaptureSummary }) {
+  const badge = deliveryBadge(deliveryOf(capture))
+  if (!badge) return null
+  return <span className={`badge ${badge.cls}`}>{badge.text}</span>
 }
