@@ -40,7 +40,7 @@ func testAuth(ctx context.Context, slug, token string) (string, error) {
 // newTestServer starts a tunnel on a real HTTP listener. Real, not
 // httptest.NewRecorder, because a WebSocket upgrade needs a hijackable
 // connection and a recorder cannot be hijacked.
-func newTestServer(t *testing.T, opt Options) (*httptest.Server, context.CancelFunc) {
+func newTestServer(t *testing.T, opt Options) (*Server, *httptest.Server, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	ts := &Server{
@@ -48,6 +48,7 @@ func newTestServer(t *testing.T, opt Options) (*httptest.Server, context.CancelF
 		auth:             testAuth,
 		publicURL:        func(slug string) string { return "https://" + slug + ".example.test/" },
 		baseCtx:          ctx,
+		hub:              NewHub(),
 		handshakeTimeout: firstNonZero(opt.HandshakeTimeout, defaultHandshakeTimeout),
 		pingInterval:     firstNonZero(opt.PingInterval, defaultPingInterval),
 		pongTimeout:      firstNonZero(opt.PongTimeout, defaultPongTimeout),
@@ -55,7 +56,7 @@ func newTestServer(t *testing.T, opt Options) (*httptest.Server, context.CancelF
 	srv := httptest.NewServer(http.HandlerFunc(ts.Handle))
 	t.Cleanup(srv.Close)
 	t.Cleanup(cancel)
-	return srv, cancel
+	return ts, srv, cancel
 }
 
 func dial(t *testing.T, srv *httptest.Server) *websocket.Conn {
@@ -119,7 +120,7 @@ func expectClose(t *testing.T, c *websocket.Conn, code string) Close {
 }
 
 func TestHandshakeSucceeds(t *testing.T) {
-	srv, _ := newTestServer(t, Options{})
+	_, srv, _ := newTestServer(t, Options{})
 	c := dial(t, srv)
 
 	writeFrame(t, c, TypeHello, Hello{Slug: goodSlug, Token: goodToken, Version: ProtocolVersion})
@@ -220,7 +221,7 @@ func TestHandshakeRejects(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, _ := newTestServer(t, Options{})
+			_, srv, _ := newTestServer(t, Options{})
 			c := dial(t, srv)
 			tc.send(t, c)
 			expectClose(t, c, tc.code)
@@ -231,7 +232,7 @@ func TestHandshakeRejects(t *testing.T) {
 // TestHandshakeTimeout is the security bound: the upgrade completes before
 // authentication, so a connection that never authenticates must not be free.
 func TestHandshakeTimeout(t *testing.T) {
-	srv, _ := newTestServer(t, Options{HandshakeTimeout: 150 * time.Millisecond})
+	_, srv, _ := newTestServer(t, Options{HandshakeTimeout: 150 * time.Millisecond})
 	c := dial(t, srv)
 
 	// Say nothing at all.
@@ -251,7 +252,7 @@ func TestHandshakeTimeout(t *testing.T) {
 // comment in handshake() warns about: if the 10s handshake context were reused
 // for the serve loop, every healthy tunnel would die after ten seconds.
 func TestHandshakeDeadlineDoesNotLeakIntoConnection(t *testing.T) {
-	srv, _ := newTestServer(t, Options{
+	_, srv, _ := newTestServer(t, Options{
 		HandshakeTimeout: 100 * time.Millisecond,
 		PingInterval:     20 * time.Millisecond,
 		PongTimeout:      time.Second,
@@ -279,7 +280,7 @@ func TestHandshakeDeadlineDoesNotLeakIntoConnection(t *testing.T) {
 // TestPingKeepsConnectionAlive covers failure mode 7. Ping waits for the pong,
 // so a connection surviving many ping cycles proves the round trip works.
 func TestPingKeepsConnectionAlive(t *testing.T) {
-	srv, _ := newTestServer(t, Options{
+	_, srv, _ := newTestServer(t, Options{
 		PingInterval: 20 * time.Millisecond,
 		PongTimeout:  time.Second,
 	})
@@ -300,7 +301,7 @@ func TestPingKeepsConnectionAlive(t *testing.T) {
 // instead of the request's: http.Server.Shutdown does not wait for, or even
 // know about, hijacked connections.
 func TestShutdownClosesTunnels(t *testing.T) {
-	srv, cancel := newTestServer(t, Options{})
+	_, srv, cancel := newTestServer(t, Options{})
 	c := dial(t, srv)
 	writeFrame(t, c, TypeHello, Hello{Slug: goodSlug, Token: goodToken, Version: ProtocolVersion})
 	if env := readFrame(t, c, 5*time.Second); env.Type != TypeHelloOK {
@@ -318,7 +319,7 @@ func TestShutdownClosesTunnels(t *testing.T) {
 // TestNoGoroutineLeak is the standing Phase 3 concern: every connection starts
 // a read goroutine, and every exit path has to end it.
 func TestNoGoroutineLeak(t *testing.T) {
-	srv, _ := newTestServer(t, Options{
+	_, srv, _ := newTestServer(t, Options{
 		HandshakeTimeout: 100 * time.Millisecond,
 		PingInterval:     20 * time.Millisecond,
 		PongTimeout:      500 * time.Millisecond,

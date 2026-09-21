@@ -38,6 +38,12 @@ const (
 	// by the library rather than by us noticing. Raised after the handshake,
 	// once we know who is on the other end and response bodies start arriving.
 	handshakeReadLimit = 4 << 10
+
+	// After the handshake, responses carry bodies. Bounded at the ingest cap
+	// plus room for base64 expansion and the surrounding JSON -- generous, but
+	// finite, because an unbounded read is the vulnerability from unit 06 in a
+	// different costume.
+	responseReadLimit = 2 << 20
 )
 
 // ErrUnauthorized is what an AuthFunc returns for a bad slug or token. It is
@@ -73,6 +79,11 @@ type Server struct {
 	// Without this, a restart would drop every tunnel abruptly with no close
 	// frame, and each CLI would discover it only when its next ping failed.
 	baseCtx context.Context
+
+	// hub is the registry of live tunnels. Owned here and exposed through
+	// Hub(), so ingest can forward a request without knowing this package has
+	// sockets in it at all.
+	hub *Hub
 }
 
 // Options carries the tunables. Zero values mean "use the default", so a
@@ -90,12 +101,16 @@ func New(baseCtx context.Context, log *slog.Logger, auth AuthFunc, publicURL fun
 		auth:             auth,
 		publicURL:        publicURL,
 		baseCtx:          baseCtx,
+		hub:              NewHub(),
 		handshakeTimeout: firstNonZero(opt.HandshakeTimeout, defaultHandshakeTimeout),
 		pingInterval:     firstNonZero(opt.PingInterval, defaultPingInterval),
 		pongTimeout:      firstNonZero(opt.PongTimeout, defaultPongTimeout),
 	}
 	return s
 }
+
+// Hub exposes the registry of connected tunnels.
+func (s *Server) Hub() *Hub { return s.hub }
 
 func firstNonZero(v, fallback time.Duration) time.Duration {
 	if v != 0 {
@@ -144,10 +159,45 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log := s.log.With("inbox", slug, "endpoint_id", ep, "remote", r.RemoteAddr)
+
+	// Response bodies come back through this connection, so the handshake's
+	// deliberately tiny limit has to go up now that the peer is known. Still
+	// bounded: the same cap ingest applies on the way in, plus room for
+	// base64's 4/3 expansion and the surrounding JSON.
+	c.SetReadLimit(responseReadLimit)
+
+	cl := newClient(c, log)
+	// close() before unregister(), and both deferred here so they run however
+	// this function exits. Order matters: waking the waiters first means a
+	// caller that retries immediately finds the registry already consistent.
+	defer cl.close()
+	defer s.hub.unregister(ep, cl)
+
+	if old := s.hub.register(ep, cl); old != nil {
+		// Failure mode 5. The displaced client is told why, in words it can
+		// print, before its socket goes away -- otherwise the developer sees
+		// an unexplained disconnect and suspects their network.
+		log.Info("tunnel replaced an existing connection")
+
+		// Waking the old client's waiters is instant and happens inline, so
+		// anything blocked on the dead tunnel fails over at once.
+		old.close()
+
+		// Tearing down its socket is NOT on this connection's critical path.
+		// The peer being replaced is usually a laptop that slept or lost
+		// Wi-Fi -- it is gone and will not acknowledge anything. Doing this
+		// inline delays s.serve below, so the new tunnel would be registered
+		// and visibly "connected" while its read loop had not started and no
+		// response could be delivered. That is exactly the bug this comment
+		// replaced, found by a test that got ErrTimeout where it expected a
+		// response.
+		go s.closeWith(old.conn, CodeReplaced, "another client connected for this inbox")
+	}
+
 	log.Info("tunnel connected")
 	defer log.Info("tunnel disconnected")
 
-	s.serve(ctx, c, log)
+	s.serve(ctx, cl, log)
 }
 
 // handshake reads the hello frame, authenticates it, and answers. It reports
@@ -258,7 +308,7 @@ func (s *Server) handshake(ctx context.Context, c *websocket.Conn, r *http.Reque
 }
 
 // serve holds an authenticated connection open until it dies.
-func (s *Server) serve(ctx context.Context, c *websocket.Conn, log *slog.Logger) {
+func (s *Server) serve(ctx context.Context, cl *client, log *slog.Logger) {
 	// Buffered with room for exactly the one value this goroutine sends.
 	// Unbuffered, a reader that finishes after we have stopped selecting --
 	// which is every path where the ping loop exits first -- would block
@@ -274,7 +324,7 @@ func (s *Server) serve(ctx context.Context, c *websocket.Conn, log *slog.Logger)
 	// itself closing. Cancelling ctx ends this supervisor loop, the supervisor
 	// closes the connection, and the closed connection ends the reader. One
 	// direction, no race.
-	go func() { readErr <- s.readLoop(context.WithoutCancel(ctx), c) }()
+	go func() { readErr <- s.readLoop(context.WithoutCancel(ctx), cl) }()
 
 	ticker := time.NewTicker(s.pingInterval)
 	defer ticker.Stop()
@@ -284,7 +334,7 @@ func (s *Server) serve(ctx context.Context, c *websocket.Conn, log *slog.Logger)
 		case <-ctx.Done():
 			// Process shutdown. The peer is told why, so the CLI can print
 			// something better than "connection reset".
-			s.closeWith(c, CodeServerShutdown, "server is shutting down")
+			s.closeWith(cl.conn, CodeServerShutdown, "server is shutting down")
 			return
 
 		case err := <-readErr:
@@ -300,7 +350,7 @@ func (s *Server) serve(ctx context.Context, c *websocket.Conn, log *slog.Logger)
 			// the keepalive that stops an idle NAT row expiring and the
 			// liveness check that detects a peer which died without closing.
 			pctx, cancel := context.WithTimeout(ctx, s.pongTimeout)
-			err := c.Ping(pctx)
+			err := cl.conn.Ping(pctx)
 			cancel()
 			if err != nil {
 				log.Info("tunnel ping failed; treating peer as gone", "err", err)
@@ -312,33 +362,46 @@ func (s *Server) serve(ctx context.Context, c *websocket.Conn, log *slog.Logger)
 
 // readLoop consumes frames until the connection ends.
 //
-// It must keep reading even though this unit has no frame worth acting on yet:
-// a WebSocket's control frames -- including the pong that Ping is waiting for
-// -- are only processed while a read is in flight. Stop reading and every ping
+// There is exactly ONE of these per connection, which is required twice over.
+// The library permits concurrent calls to every method except Read. And the
+// correlation design assumes a single reader: it is what lets deliver hand a
+// response to a waiting goroutine without any ordering between responses.
+//
+// It must also keep reading even when no frame is pending, because a
+// WebSocket's control frames -- including the pong that Ping is waiting for --
+// are only processed while a read is in flight. Stop reading and every ping
 // times out on a perfectly healthy connection.
-func (s *Server) readLoop(ctx context.Context, c *websocket.Conn) error {
+func (s *Server) readLoop(ctx context.Context, cl *client) error {
 	for {
-		typ, data, err := c.Read(ctx)
+		typ, data, err := cl.conn.Read(ctx)
 		if err != nil {
 			return err
 		}
 		if typ != websocket.MessageText {
-			s.closeWith(c, CodeMalformed, "frames must be text, not binary")
+			s.closeWith(cl.conn, CodeMalformed, "frames must be text, not binary")
 			return nil
 		}
 		env, err := DecodeEnvelope(data)
 		if err != nil {
-			s.closeWith(c, CodeMalformed, err.Error())
+			s.closeWith(cl.conn, CodeMalformed, err.Error())
 			return nil
 		}
 		switch env.Type {
 		case TypeResponse:
-			// Correlation arrives in unit 19. Until then a response frame has
-			// no request to belong to, so it is dropped with a log rather than
-			// silently ignored.
-			s.log.Debug("tunnel response frame with no pending request (not yet implemented)")
+			var resp Response
+			if err := DecodePayload(env, &resp); err != nil {
+				s.closeWith(cl.conn, CodeMalformed, err.Error())
+				return nil
+			}
+			// deliver never blocks: the channel it sends on is buffered, and
+			// the entry is removed under the same lock that found it. That
+			// matters here more than anywhere else in the package -- this
+			// goroutine is the sole reader, so blocking it would freeze every
+			// other in-flight request on this tunnel.
+			cl.deliver(&resp)
+
 		default:
-			s.closeWith(c, CodeMalformed, "unexpected frame type "+string(env.Type))
+			s.closeWith(cl.conn, CodeMalformed, "unexpected frame type "+string(env.Type))
 			return nil
 		}
 	}
@@ -358,12 +421,19 @@ func (s *Server) closeWith(c *websocket.Conn, code, reason string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.baseCtx), 2*time.Second)
 	defer cancel()
 
+	// CloseNow below, not Close. Close performs the WebSocket closing
+	// handshake -- it writes a close frame and then WAITS for the peer's --
+	// and the peer here is frequently a machine that has already gone away,
+	// so that wait is paid in full for nothing. We can afford to skip it
+	// precisely because of the decision above: the reason has already been
+	// delivered in an application-level frame, so the protocol close would
+	// only add a status code.
 	if b, err := Encode(TypeClose, Close{Code: code, Reason: reason}); err == nil {
 		// Best effort. If the peer is already gone this fails, and that is
 		// exactly the case where there is nothing useful to do about it.
 		_ = c.Write(ctx, websocket.MessageText, b)
 	}
-	_ = c.Close(websocket.StatusNormalClosure, code)
+	_ = c.CloseNow()
 }
 
 func isNormalClose(err error) bool {

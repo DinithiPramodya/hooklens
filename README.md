@@ -143,5 +143,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [16 — Recursive rendering: the JSON tree and the detail pane](docs/learn/16-recursive-rendering.md)
 - [17 — NAT and firewalls: why the internet cannot reach your laptop](docs/learn/17-nat-and-firewalls.md)
 - [18 — WebSocket: an HTTP request that stops being HTTP](docs/learn/18-websockets.md)
+- [19 — Multiplexing and correlation: one connection, many requests](docs/learn/19-multiplexing-and-correlation.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

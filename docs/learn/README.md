@@ -68,6 +68,7 @@ built to demonstrate.*
 |---|---|---|
 | 17 | [NAT and firewalls](17-nat-and-firewalls.md) | Why the internet cannot reach your laptop · translation rows are created by outbound packets · connection tracking and why rows expire · what the dev machine actually shows |
 | 18 | [WebSocket](18-websockets.md) | An HTTP request that stops being HTTP · the `Upgrade` handshake and frames · why not SSE here · a cancelled read context closes the connection |
+| 19 | [Multiplexing and correlation](19-multiplexing-and-correlation.md) | Why HTTP gives correlation for free and this does not · the `map[id]chan` pattern · why a mutex, not a manager goroutine · every exit path deletes its entry · waking waiters the instant a tunnel drops |
 
 **Quiz:** pending — written at the end of the phase.
 

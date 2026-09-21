@@ -62,6 +62,49 @@ type Hello struct {
 	Version int    `json:"version"`
 }
 
+// Header is one HTTP header as it crosses the tunnel.
+//
+// Its own type rather than reusing capture.Header, for the reason the store
+// keeps its own headerJSON: this shape is a CONTRACT WITH A SEPARATELY
+// VERSIONED PROGRAM. A CLI installed months ago is still speaking it, so
+// renaming a field on an internal domain type must not silently change the
+// wire. A four-line struct is a cheap price for the two being able to move
+// independently.
+//
+// A slice of pairs, not a map, for the reason established in
+// docs/learn/07-storing-a-request.md: header names repeat and their order is
+// evidence.
+type Header struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// Request is a captured webhook being handed to the CLI for forwarding.
+type Request struct {
+	// ReqID correlates this request with its response. Assigned by the
+	// server; a client must echo it back unchanged.
+	ReqID   string   `json:"req_id"`
+	Method  string   `json:"method"`
+	Path    string   `json:"path"`
+	Query   string   `json:"query"`
+	Headers []Header `json:"headers"`
+	BodyB64 string   `json:"body_b64"`
+}
+
+// Response is what the local app said, relayed back.
+type Response struct {
+	ReqID   string   `json:"req_id"`
+	Status  int      `json:"status"`
+	Headers []Header `json:"headers"`
+	BodyB64 string   `json:"body_b64"`
+	// Error is set when the CLI could not reach the local app at all --
+	// connection refused, DNS failure, its own timeout. Distinct from a
+	// response with a 5xx status, which means the local app was reached and
+	// answered badly. Conflating them would tell a developer their app is
+	// broken when in fact it is not running.
+	Error string `json:"error,omitempty"`
+}
+
 // HelloOK accepts a hello.
 type HelloOK struct {
 	Slug      string `json:"slug"`
