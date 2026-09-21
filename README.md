@@ -175,5 +175,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [23 — Semaphores, bounded concurrency, and backpressure](docs/learn/23-bounded-concurrency.md)
 - [24 — Size limits at every boundary](docs/learn/24-size-limits.md)
 - [25 — Showing delivery: three states, not two](docs/learn/25-showing-delivery.md)
+- [26 — Hashes, MACs, HMAC, and comparing without leaking](docs/learn/26-hmac.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

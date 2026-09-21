@@ -79,7 +79,21 @@ last, after the domain question was settled.*
 
 ---
 
+
+---
+
+## Phase 4 — The wedge features
+
+*In progress.*
+
+| | Note | Covers |
+|---|---|---|
+| 26 | [Hashes, MACs and HMAC](26-hmac.md) | Why a plain hash proves nothing · length extension, and why hashing secret-then-body is broken · MAC vs signature · timing attacks and constant-time comparison |
+
+**Quiz:** pending — written at the end of the phase.
+
+---
+
 ## Still to come
 
-- **Phase 4 — the wedge features:** hash functions, HMAC, timing attacks, replay windows, structural diff
 - **Phase 5 — hardening:** rate limiting, metrics, load testing, testcontainers, distribution

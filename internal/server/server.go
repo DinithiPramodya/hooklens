@@ -151,6 +151,9 @@ func (s *Server) appRoutes() http.Handler {
 	mux.HandleFunc("POST /api/endpoints", s.handleCreateEndpoint)
 	mux.HandleFunc("GET /api/endpoints/{slug}/requests", s.handleListRequests)
 	mux.HandleFunc("GET /api/requests/{id}", s.handleGetRequest)
+	// POST because it carries a secret, which must never reach a query
+	// string -- see the handler.
+	mux.HandleFunc("POST /api/requests/{id}/verify", s.handleVerify)
 	mux.HandleFunc("GET /api/endpoints/{slug}/stream", s.handleStream)
 
 	// The tunnel. One connection per CLI, authenticated by its first frame
