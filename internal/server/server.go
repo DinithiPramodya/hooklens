@@ -476,6 +476,12 @@ func (s *Server) EvictTouched() int {
 	return s.ingest.EvictTouched(idle)
 }
 
+// EvictEndpointCache drops expired inbox-resolution entries.
+//
+// Entries already expire on read, so this only reaches the ones nobody asked
+// for again -- an inbox that went quiet, or a slug someone guessed once.
+func (s *Server) EvictEndpointCache() int { return s.ingest.EvictEndpointCache() }
+
 // Rate-limit defaults, used when the config carries zero.
 //
 // These match the defaults in internal/config; duplicated deliberately so

@@ -80,6 +80,10 @@ type Handler struct {
 	// went to the same one. The bottleneck was a column nobody looks at more
 	// than once a minute. See docs/learn/33-load-testing.md.
 	touched map[string]time.Time
+
+	// endpoints caches slug -> inbox for a few seconds, removing the third
+	// of the capture path's three database round trips. See cache.go.
+	endpoints *endpointCache
 }
 
 // touchInterval is how stale last_seen_at is allowed to get.
@@ -96,6 +100,7 @@ func New(log *slog.Logger, st *store.Store, br *broker.Broker, fwd Forwarder, ma
 		log: log, store: st, broker: br, fwd: fwd, maxBody: maxBody,
 		forwardTimeout: defaultForwardTimeout,
 		touched:        map[string]time.Time{},
+		endpoints:      newEndpointCache(),
 	}
 }
 
@@ -140,8 +145,9 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 	// Resolve the inbox BEFORE reading the body. An unknown slug means we are
 	// about to read up to a megabyte from someone for a destination that does
 	// not exist -- which is free storage-exhaustion for anyone scanning
-	// subdomains. Rejecting first costs one indexed lookup.
-	ep, err := h.store.EndpointBySlug(ctx, slug)
+	// subdomains. Rejecting first costs one indexed lookup, or, most of the
+	// time, a map read.
+	ep, err := h.resolve(ctx, slug)
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": "no such inbox",

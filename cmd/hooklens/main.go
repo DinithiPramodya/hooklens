@@ -131,6 +131,9 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger, st *store.S
 		if n := handler.EvictTouched(); n > 0 {
 			log.Debug("forgot last-seen bookkeeping for idle inboxes", "inboxes", n)
 		}
+		if n := handler.EvictEndpointCache(); n > 0 {
+			log.Debug("dropped expired inbox cache entries", "entries", n)
+		}
 	})
 
 	srv := &http.Server{

@@ -211,5 +211,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [31 — Rate limiting: token buckets, and choosing what to count](docs/learn/31-rate-limiting.md)
 - [32 — Counters, gauges, histograms, and why p99](docs/learn/32-metrics.md)
 - [33 — Load testing, and what "dropped" actually means](docs/learn/33-load-testing.md)
+- [34 — Caching the inbox lookup, and the part everyone gets wrong](docs/learn/34-caching-and-invalidation.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).
