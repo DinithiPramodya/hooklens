@@ -51,6 +51,10 @@ type Client struct {
 	target *url.URL
 	http   *http.Client
 	log    *slog.Logger
+	// sem bounds concurrent requests to the LOCAL app. The goroutine count
+	// is already bounded by the server's per-tunnel limit; this exists
+	// because a development server is often single-threaded.
+	sem semaphore
 }
 
 // NewClient validates the options and builds the HTTP client used for local
@@ -68,6 +72,7 @@ func NewClient(opt ClientOptions) (*Client, error) {
 		opt:    opt,
 		target: target,
 		log:    opt.Log,
+		sem:    newSemaphore(maxInFlightPerTunnel),
 		http: &http.Client{
 			Timeout: localTimeout,
 			// Do NOT follow redirects. Go follows them by default, which would
@@ -268,8 +273,18 @@ func (c *Client) serve(ctx context.Context, conn *websocket.Conn) error {
 			// the read loop and every other request behind it -- the same
 			// reason the server does not serialise.
 			//
-			// Unbounded, which is the gap recorded in 20 and 21 and closed in
-			// unit 22.
+			// The concurrency bound is taken INSIDE that goroutine, never
+			// here. Acquiring on this line would block the read loop while
+			// the local app is busy, and a blocked read loop stops processing
+			// control frames -- including the pong the server's keepalive is
+			// waiting for. The server would then conclude the CLI is dead
+			// when it is merely busy, drop the tunnel, and turn a slow
+			// handler into an outage.
+			//
+			// The goroutine count is bounded anyway, by the server's own
+			// per-tunnel limit: it will not have more than that many requests
+			// outstanding. This semaphore exists to protect the local app,
+			// which is frequently a single-threaded development server.
 			go c.handle(ctx, conn, req)
 
 		case TypeClose:
@@ -288,7 +303,15 @@ func (c *Client) serve(ctx context.Context, conn *websocket.Conn) error {
 // handle performs one local request and sends the response frame.
 func (c *Client) handle(ctx context.Context, conn *websocket.Conn, req Request) {
 	start := time.Now()
-	resp := c.callLocal(ctx, req)
+
+	// Bounded here, off the read loop. The wait is capped by the local
+	// timeout, so a request that never gets a slot answers with an Error
+	// rather than sitting forever -- the server's deadline would give up on
+	// it anyway, and a reply it can no longer deliver is wasted work.
+	actx, cancel := context.WithTimeout(ctx, localTimeout)
+	defer cancel()
+
+	resp := c.callLocalBounded(actx, req)
 	resp.ReqID = req.ReqID
 
 	if resp.Error != "" {
@@ -311,6 +334,21 @@ func (c *Client) handle(ctx context.Context, conn *websocket.Conn, req Request) 
 	if err := conn.Write(wctx, websocket.MessageText, b); err != nil {
 		c.log.Warn("send response frame", "err", err)
 	}
+}
+
+// callLocalBounded takes a concurrency slot, then issues the request.
+//
+// Separated from callLocal purely so the release can be `defer`red at the
+// point of acquisition, which is the rule that keeps a missed release from
+// silently shrinking the limit forever.
+func (c *Client) callLocalBounded(ctx context.Context, req Request) Response {
+	if err := c.sem.acquire(ctx); err != nil {
+		// Never got a slot. An Error, not a status, for the same reason an
+		// unreachable app is: the local app was never asked.
+		return Response{Error: "hooklens client is at its concurrency limit"}
+	}
+	defer c.sem.release()
+	return c.callLocal(ctx, req)
 }
 
 // callLocal issues the request against the developer's app.

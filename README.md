@@ -11,7 +11,8 @@ running on your laptop. Replay, diff, and provider-signature verification on top
 > duplicates intact, raw text, or a hex dump for binary. The tunnel protocol now has an
 > authenticated WebSocket handshake, and `hooklens forward --to localhost:3000` delivers
 > captures to a local app, relays its response back to the sender, and reconnects with
-> exponential backoff and jitter on the same URL. Bounded concurrency is next.
+> exponential backoff and jitter on the same URL. In-flight forwards are bounded per
+> tunnel. Large bodies and the three-terminal test close out the phase.
 > See [PLAN.md](PLAN.md) for the full build plan.
 
 ## Requirements
@@ -170,5 +171,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [20 — Forwarding, and what the provider is told](docs/learn/20-forwarding.md)
 - [21 — The CLI: turning a frame back into an HTTP request](docs/learn/21-the-cli.md)
 - [22 — Exponential backoff, jitter, and the thundering herd](docs/learn/22-backoff-and-jitter.md)
+- [23 — Semaphores, bounded concurrency, and backpressure](docs/learn/23-bounded-concurrency.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

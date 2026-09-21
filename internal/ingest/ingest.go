@@ -363,6 +363,8 @@ func forwardErrorCode(err error) string {
 		return "timeout"
 	case errors.Is(err, tunnel.ErrDisconnected):
 		return "disconnected"
+	case errors.Is(err, tunnel.ErrOverloaded):
+		return "overloaded"
 	default:
 		return "protocol"
 	}

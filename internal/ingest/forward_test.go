@@ -12,7 +12,8 @@ import (
 // TestForwardErrorCodeCoversEveryHubError is a guard against a specific
 // production failure rather than a check of a switch statement.
 //
-// The permitted values are fixed by a CHECK constraint in migration 00006. An
+// The permitted values are fixed by a CHECK constraint, migration 00006 as
+// amended by 00007. An
 // error that fell through to its own text would violate that constraint on the
 // UPDATE, and surface as a database fault logged far from the actual cause --
 // a new error type added in internal/tunnel.
@@ -20,7 +21,7 @@ func TestForwardErrorCodeCoversEveryHubError(t *testing.T) {
 	// The codes the CHECK constraint allows.
 	allowed := map[string]bool{
 		"no_tunnel": true, "timeout": true, "disconnected": true,
-		"unreachable": true, "protocol": true,
+		"unreachable": true, "protocol": true, "overloaded": true,
 	}
 
 	cases := []struct {
@@ -30,6 +31,7 @@ func TestForwardErrorCodeCoversEveryHubError(t *testing.T) {
 		{tunnel.ErrNoTunnel, "no_tunnel"},
 		{tunnel.ErrTimeout, "timeout"},
 		{tunnel.ErrDisconnected, "disconnected"},
+		{tunnel.ErrOverloaded, "overloaded"},
 		{errors.New("something nobody anticipated"), "protocol"},
 		// Wrapped, because the hub wraps write failures.
 		{fmt.Errorf("write request frame: %w", tunnel.ErrDisconnected), "disconnected"},
@@ -41,7 +43,7 @@ func TestForwardErrorCodeCoversEveryHubError(t *testing.T) {
 			t.Errorf("forwardErrorCode(%v) = %q, want %q", tc.err, got, tc.want)
 		}
 		if !allowed[got] {
-			t.Errorf("forwardErrorCode(%v) = %q, which the 00006 CHECK constraint rejects", tc.err, got)
+			t.Errorf("forwardErrorCode(%v) = %q, which the forward_error CHECK constraint rejects", tc.err, got)
 		}
 	}
 }

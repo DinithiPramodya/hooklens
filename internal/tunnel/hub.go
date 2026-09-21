@@ -20,6 +20,13 @@ var (
 	ErrNoTunnel     = errors.New("no tunnel connected for this inbox")
 	ErrTimeout      = errors.New("tunnel request timed out")
 	ErrDisconnected = errors.New("tunnel disconnected while the request was in flight")
+	// ErrOverloaded means the tunnel was already at its in-flight limit and a
+	// slot did not come free before the deadline.
+	//
+	// Distinct from ErrTimeout on purpose, and the distinction is the same one
+	// this package keeps making: "your app did not answer" and "we never asked
+	// it" send a developer to different places.
+	ErrOverloaded = errors.New("tunnel is at its in-flight limit")
 )
 
 // Hub is the registry of connected tunnels, one per inbox.
@@ -114,6 +121,12 @@ type client struct {
 	// for an answer that provably cannot arrive -- thirty seconds of a
 	// provider holding a connection open for nothing, per in-flight request.
 	done chan struct{}
+
+	// sem bounds in-flight requests on this tunnel -- failure mode 9.
+	//
+	// Per client, not per hub: one inbox being hammered must not starve the
+	// others. See docs/learn/23-bounded-concurrency.md.
+	sem semaphore
 }
 
 func newClient(conn *websocket.Conn, log *slog.Logger) *client {
@@ -122,11 +135,28 @@ func newClient(conn *websocket.Conn, log *slog.Logger) *client {
 		log:     log,
 		pending: make(map[string]chan *Response),
 		done:    make(chan struct{}),
+		sem:     newSemaphore(maxInFlightPerTunnel),
 	}
 }
 
 // send writes a request and waits for the matching response.
 func (c *client) send(ctx context.Context, req Request) (*Response, error) {
+	// The bound, taken before anything else is allocated. Waiting here rather
+	// than rejecting immediately is right because the provider is already
+	// waiting and the caller's deadline bounds the wait -- see the three
+	// choices in the note.
+	if err := c.sem.acquire(ctx); err != nil {
+		// The deadline expired while queued, so the request was never sent.
+		// Reported as ErrOverloaded rather than ErrTimeout: nothing was asked
+		// of the local app, and saying otherwise would send its author
+		// debugging a handler that never ran.
+		return nil, ErrOverloaded
+	}
+	// Deferred at the point of acquisition, not at the end of the happy path.
+	// A single early return that skipped this would permanently shrink the
+	// tunnel's capacity -- silently, cumulatively, and with no error anywhere.
+	defer c.sem.release()
+
 	id := strconv.FormatUint(c.nextID.Add(1), 10)
 	req.ReqID = id
 
