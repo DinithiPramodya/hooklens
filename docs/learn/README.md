@@ -92,6 +92,7 @@ last, after the domain question was settled.*
 | 27 | [Replay and SSRF](27-replay-and-ssrf.md) | The feature and the attack are the same bytes · why the guard must run at the dial, not before · DNS rebinding · what `IsGlobalUnicast` does not mean |
 | 28 | [Structural diff](28-structural-diff.md) | Why a text diff of JSON is noise · sorting the key union is correctness · matching array elements by id vs index · UseNumber and the 2^53 trap |
 | 29 | [Mutations and secrets](29-mutations-and-secrets.md) | Why a query and a mutation are different things · a replay that runs twice cannot be undone · where a signing secret may live in a browser |
+| 30 | [Diagnosing flaky tests](30-diagnosing-flaky-tests.md) | What the SHAPE of an intermittent failure rules out · a precondition that skipped itself · an httptest teardown deadlock · an RST discarding the frame that explained it |
 
 **Quiz:** pending — written at the end of the phase.
 

@@ -12,7 +12,7 @@ import (
 
 // startClient runs a real Client against a real tunnel server and reports
 // each successful connection on the returned channel.
-func startClient(t *testing.T, srv *httptest.Server, slug, token string) (<-chan string, <-chan error) {
+func startClient(t *testing.T, srv *httptest.Server, slug, token string) (<-chan string, <-chan error, func()) {
 	t.Helper()
 
 	connects := make(chan string, 16)
@@ -49,16 +49,24 @@ func startClient(t *testing.T, srv *httptest.Server, slug, token string) (<-chan
 	// moment, and a client still mid-reconnect outlives its own test. Together
 	// with per-test inboxes, that is what keeps one test from displacing the
 	// next one's tunnel.
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-stopped:
-		case <-time.After(5 * time.Second):
-			t.Error("client did not stop within 5s of cancellation")
-		}
-	})
+	var once sync.Once
+	stopOnce := func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case <-stopped:
+			case <-time.After(5 * time.Second):
+				t.Error("client did not stop within 5s of cancellation")
+			}
+		})
+	}
+	t.Cleanup(stopOnce)
 
-	return connects, done
+	// The stopper is returned as well as registered as a Cleanup, because a
+	// test that also closes an httptest server must stop the client FIRST:
+	// httptest.Close waits for outstanding requests, and a tunnel handler
+	// does not return while a client is attached.
+	return connects, done, stopOnce
 }
 
 func waitConnect(t *testing.T, connects <-chan string, within time.Duration, what string) {
@@ -76,7 +84,7 @@ func TestClientReconnectsAfterDrop(t *testing.T) {
 	ts, srv, _ := newTestServer(t, Options{})
 	slug, endpointID := uniqueInbox(t)
 
-	connects, _ := startClient(t, srv, slug, goodToken)
+	connects, _, _ := startClient(t, srv, slug, goodToken)
 	waitConnect(t, connects, 5*time.Second, "initial connection")
 	waitConnected(t, ts.Hub(), endpointID)
 
@@ -115,7 +123,7 @@ func TestClientReconnectsRepeatedly(t *testing.T) {
 	ts, srv, _ := newTestServer(t, Options{})
 	slug, endpointID := uniqueInbox(t)
 
-	connects, _ := startClient(t, srv, slug, goodToken)
+	connects, _, _ := startClient(t, srv, slug, goodToken)
 	waitConnect(t, connects, 5*time.Second, "initial connection")
 
 	for i := range 3 {
@@ -138,7 +146,7 @@ func TestClientStopsOnPermanentError(t *testing.T) {
 	_, srv, _ := newTestServer(t, Options{})
 	slug, _ := uniqueInbox(t)
 
-	_, done := startClient(t, srv, slug, "the-wrong-token")
+	_, done, _ := startClient(t, srv, slug, "the-wrong-token")
 
 	select {
 	case err := <-done:
@@ -222,10 +230,28 @@ func TestClientSurvivesServerRestart(t *testing.T) {
 		}
 		ts.Handle(w, r)
 	}))
-	defer srv.Close()
+	// NOT a bare `defer srv.Close()`. httptest.Close waits for outstanding
+	// requests, and a tunnel handler does not return while a client is
+	// attached -- so closing the server before stopping the client
+	// deadlocks until httptest gives up. Defers run LIFO and t.Cleanup runs
+	// after all of them, so the client's own cleanup is too late.
+	stopClient := func() {}
+	defer func() {
+		stopClient()
+		srv.Close()
+	}()
 
-	connects, _ := startClient(t, srv, slug, goodToken)
+	connects, _, stop := startClient(t, srv, slug, goodToken)
+	stopClient = stop
 	waitConnect(t, connects, 5*time.Second, "initial connection")
+
+	// The client reads hello_ok BEFORE the server finishes registering it,
+	// so waitConnect returning does not mean the hub knows about it yet.
+	// Without this the lookup below finds nil, the drop never happens, and
+	// the test waits twenty seconds for a reconnection nothing triggered --
+	// which is exactly how this failed, intermittently, looking like a
+	// reconnection bug rather than a test bug.
+	waitConnected(t, ts.Hub(), endpointID)
 
 	// "Restart": refuse upgrades, drop the live connection, then recover.
 	mu.Lock()
@@ -235,9 +261,13 @@ func TestClientSurvivesServerRestart(t *testing.T) {
 	ts.hub.mu.Lock()
 	victim := ts.hub.clients[endpointID]
 	ts.hub.mu.Unlock()
-	if victim != nil {
-		victim.conn.CloseNow()
+	// Fatal, not a silent skip. A nil here means the precondition failed,
+	// and skipping the drop turns that into a twenty-second timeout with a
+	// misleading message.
+	if victim == nil {
+		t.Fatal("no client registered to drop")
 	}
+	victim.conn.CloseNow()
 
 	time.Sleep(600 * time.Millisecond) // long enough for a failed attempt or two
 

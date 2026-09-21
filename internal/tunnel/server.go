@@ -59,6 +59,11 @@ const (
 	// The slack covers the headers (bounded separately at the HTTP server) and
 	// the surrounding JSON.
 	maxFrameBytes = maxBodyBytes/3*4 + 256<<10
+
+	// closeGrace bounds the WebSocket closing handshake. Long enough for a
+	// live peer on any real link, short enough that a dead one costs
+	// nothing worth measuring.
+	closeGrace = 1 * time.Second
 )
 
 // ErrUnauthorized is what an AuthFunc returns for a bad slug or token. It is
@@ -436,19 +441,37 @@ func (s *Server) closeWith(c *websocket.Conn, code, reason string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.baseCtx), 2*time.Second)
 	defer cancel()
 
-	// CloseNow below, not Close. Close performs the WebSocket closing
-	// handshake -- it writes a close frame and then WAITS for the peer's --
-	// and the peer here is frequently a machine that has already gone away,
-	// so that wait is paid in full for nothing. We can afford to skip it
-	// precisely because of the decision above: the reason has already been
-	// delivered in an application-level frame, so the protocol close would
-	// only add a status code.
 	if b, err := Encode(TypeClose, Close{Code: code, Reason: reason}); err == nil {
 		// Best effort. If the peer is already gone this fails, and that is
 		// exactly the case where there is nothing useful to do about it.
 		_ = c.Write(ctx, websocket.MessageText, b)
 	}
-	_ = c.CloseNow()
+
+	// A GRACEFUL close, bounded, rather than CloseNow.
+	//
+	// Unit 19 changed this to CloseNow to avoid waiting on a closing
+	// handshake with a peer that had gone away. That was half right, and the
+	// other half cost a flaky test: CloseNow can abort the connection with a
+	// TCP RST, and an RST makes the peer **discard data already sitting in
+	// its receive buffer** -- including the close frame just written to
+	// explain why it is being disconnected. The peer then sees an
+	// unexplained EOF, which is the exact failure the application-level
+	// frame exists to prevent.
+	//
+	// So: try the handshake, and give up on it quickly. A live peer answers
+	// in microseconds over loopback; a dead one costs closeGrace and no
+	// more. Callers that must not block at all -- the eviction path in
+	// Handle -- already run this in a goroutine.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = c.Close(websocket.StatusNormalClosure, code)
+	}()
+	select {
+	case <-done:
+	case <-time.After(closeGrace):
+		_ = c.CloseNow()
+	}
 }
 
 func isNormalClose(err error) bool {
