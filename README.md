@@ -177,5 +177,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [25 — Showing delivery: three states, not two](docs/learn/25-showing-delivery.md)
 - [26 — Hashes, MACs, HMAC, and comparing without leaking](docs/learn/26-hmac.md)
 - [27 — Replay: the same mechanism as the attack](docs/learn/27-replay-and-ssrf.md)
+- [28 — Structural diff: comparing trees, not text](docs/learn/28-structural-diff.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).

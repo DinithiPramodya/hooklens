@@ -160,6 +160,8 @@ func (s *Server) appRoutes() http.Handler {
 	// string -- see the handler.
 	mux.HandleFunc("POST /api/requests/{id}/verify", s.handleVerify)
 	mux.HandleFunc("POST /api/requests/{id}/replay", s.handleReplay)
+	// GET, unlike the two above: no secret, and a diff is worth linking to.
+	mux.HandleFunc("GET /api/requests/{id}/diff", s.handleDiff)
 	mux.HandleFunc("GET /api/endpoints/{slug}/stream", s.handleStream)
 
 	// The tunnel. One connection per CLI, authenticated by its first frame
