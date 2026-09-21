@@ -111,6 +111,7 @@ last, after the domain question was settled.*
 | 32 | [Metrics](32-metrics.md) | Counters vs gauges vs histograms · the Prometheus text format, written by hand · cumulative buckets and the `+Inf` slot · why p99 and not the mean · cardinality, and why a path label kills a scraper |
 | 33 | [Load testing](33-load-testing.md) | Coordinated omission and open-loop generators · the five meanings of "dropped" · measuring the bottleneck instead of guessing · why a thousand updates a second to one row serialise |
 | 34 | [Caching and invalidation](34-caching-and-invalidation.md) | TTL vs explicit invalidation vs eviction · caching negatives · the stampede · why refusing admission beats LRU under a scan · never caching an authorisation decision |
+| 35 | [Release and distribution](35-release-and-distribution.md) | Cross-compilation without a toolchain per target · why `CGO_ENABLED` defaults differently on different machines · reproducible builds · what a Homebrew tap actually is · checksums as the security boundary |
 
 **Quiz:** pending — written at the end of the phase.
 

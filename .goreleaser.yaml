@@ -1,0 +1,180 @@
+# GoReleaser builds, packages and publishes a tagged release.
+#
+# Every field here is explained in docs/learn/35-release-and-distribution.md.
+# The short version: one binary, five platform pairs, checksums, a Homebrew
+# formula and a Scoop manifest -- so `brew install` and `scoop install` work
+# without anybody having Go.
+version: 2
+
+project_name: hooklens
+
+before:
+  hooks:
+    # The frontend is compiled INTO the binary by //go:embed, and the embed
+    # reads internal/webui/dist at compile time. If this does not run first,
+    # the build succeeds -- dist/.gitkeep satisfies the embed directive -- and
+    # produces a release binary that serves no UI. That failure is silent and
+    # would ship. Same reasoning as the ordering note in .github/workflows/ci.yml.
+    - cmd: npm ci
+      dir: web
+    - cmd: npm run build
+      dir: web
+    # Verify the module graph is tidy before spending time on five builds.
+    - go mod verify
+
+builds:
+  - id: hooklens
+    main: ./cmd/hooklens
+    binary: hooklens
+
+    env:
+      # The single most important line in this file.
+      #
+      # CGO_ENABLED defaults to 1 when a C compiler is present and 0 when it is
+      # not, so the same command produces a differently-linked binary depending
+      # on the machine it ran on. With cgo, net and os/user link against the
+      # host's libc, and the binary then fails on any system with an older one
+      # -- on the user's machine, not on ours. Forcing it off selects the pure
+      # Go resolver and produces a genuinely static binary.
+      - CGO_ENABLED=0
+
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+    ignore:
+      # Windows on ARM is real but the audience for a webhook inspector CLI
+      # there is nobody, and every extra target is an artifact to test and a
+      # checksum to explain. Added when somebody asks.
+      - goos: windows
+        goarch: arm64
+
+    flags:
+      # Strip the local module path and build directory from the binary, so two
+      # builds of the same commit on different machines produce the same bytes.
+      # Reproducibility is not a nicety here: it is what lets anyone check that
+      # the published artifact matches the published source.
+      - -trimpath
+
+    ldflags:
+      # -s -w drop the symbol table and DWARF debug info, roughly 30% off the
+      # binary. The cost is that a stack trace from a user has no symbol names;
+      # acceptable because panics here are logged with our own context, not
+      # diagnosed from a core dump.
+      - -s -w
+      # A binary cannot read the git tag it was built from, so the version is
+      # injected. main.version defaults to "dev", which is what a `go build`
+      # from a working tree correctly reports.
+      - -X main.version={{.Version}}
+
+    # Fixed timestamp from the commit, not build time: another input that would
+    # otherwise differ between two builds of the same source.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: hooklens
+    # tar.gz everywhere except Windows, where a .zip is what a double-click
+    # understands and tar.gz is a support question.
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - docs/learn/README.md
+
+checksums:
+  # One file, every artifact, SHA-256. This is the security boundary of the
+  # whole distribution story: Homebrew and Scoop do not host the binary, they
+  # point at it and verify this hash, so it is the only thing between the index
+  # and a substituted download.
+  name_template: "checksums.txt"
+
+snapshot:
+  # Used by `goreleaser build --snapshot`, which is how this config is checked
+  # without cutting a tag.
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Fixes
+      regexp: '^fix'
+      order: 1
+    - title: Performance
+      regexp: '^perf'
+      order: 2
+    - title: Other
+      order: 99
+  filters:
+    exclude:
+      # Commit noise, not release notes. The learn notes are the documentation
+      # story and they are linked from the README; repeating every docs commit
+      # in a changelog buries the three lines somebody actually needs.
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```sh
+    brew install DinithiPramodya/tap/hooklens     # macOS, Linux
+    scoop bucket add hooklens https://github.com/DinithiPramodya/scoop-bucket
+    scoop install hooklens                        # Windows
+    ```
+
+    Or download a binary above. Every archive's SHA-256 is in `checksums.txt`.
+
+brews:
+  - name: hooklens
+    # A "tap" is just a GitHub repository named homebrew-<something> holding
+    # Ruby formulas. `brew install user/tap/hooklens` resolves to
+    # github.com/user/homebrew-tap and reads hooklens.rb from it. GoReleaser
+    # generates that file and commits it here on every release, which is the
+    # only way the formula does not go stale -- and a stale formula is worse
+    # than none, because it installs an old version without saying so.
+    repository:
+      owner: DinithiPramodya
+      name: homebrew-tap
+      # A PAT, because the default GITHUB_TOKEN is scoped to THIS repository and
+      # cannot write to another one. This is the step that surprises everybody.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/DinithiPramodya/hooklens
+    description: A webhook inspector with a self-hosted tunnel to localhost.
+    # license: intentionally absent. The repository declares no licence yet,
+    # and choosing one is the author's decision, not the build tool's. Homebrew
+    # and Scoop both accept a manifest without it; this must be filled in
+    # before the first public release, because "no licence" legally means "all
+    # rights reserved" and nobody may use what they just installed.
+    # No dependencies. The binary is static and carries its UI; the only
+    # external requirement is a Postgres to point it at, which is a runtime
+    # concern and not something a formula should install for you.
+    test: |
+      system "#{bin}/hooklens", "version"
+
+scoops:
+  - name: hooklens
+    # Scoop's equivalent: a repository of JSON manifests. Same generate-and-
+    # commit model, same reason.
+    repository:
+      owner: DinithiPramodya
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    homepage: https://github.com/DinithiPramodya/hooklens
+    description: A webhook inspector with a self-hosted tunnel to localhost.
+    # license: intentionally absent. The repository declares no licence yet,
+    # and choosing one is the author's decision, not the build tool's. Homebrew
+    # and Scoop both accept a manifest without it; this must be filled in
+    # before the first public release, because "no licence" legally means "all
+    # rights reserved" and nobody may use what they just installed.

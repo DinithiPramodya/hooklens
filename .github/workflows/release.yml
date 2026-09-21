@@ -1,0 +1,58 @@
+name: Release
+
+# Tags only. A release is an explicit act -- `git tag v0.1.0 && git push --tags`
+# -- not something that happens because somebody merged to main. Pushing to main
+# thirty times a day and publishing thirty releases is how a version number stops
+# meaning anything.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  # GoReleaser creates the GitHub Release and uploads every archive to it, which
+  # the default read-only token cannot do. Still scoped to this repository: the
+  # tap and bucket live elsewhere and use their own PAT, below.
+  contents: write
+
+jobs:
+  release:
+    name: goreleaser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # GoReleaser builds the changelog from the commit history between
+          # tags, and a shallow clone has no history to read -- the release
+          # notes come out empty and nobody notices until the release is
+          # published.
+          fetch-depth: 0
+
+      # Node before Go, for the same reason as in ci.yml: //go:embed reads
+      # internal/webui/dist at COMPILE time. GoReleaser's before-hooks build the
+      # frontend, so npm has to exist by then, or five binaries ship with no UI
+      # and no error.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: web/package.json
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          # Creates the release and uploads the archives.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Separate PATs for the tap and the bucket. GITHUB_TOKEN is scoped to
+          # THIS repository and silently cannot write to another one, which
+          # shows up as a release that publishes fine and a formula that never
+          # updates. Two tokens rather than one so either can be revoked
+          # without breaking the other.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}

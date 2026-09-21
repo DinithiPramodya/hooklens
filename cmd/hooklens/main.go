@@ -46,6 +46,17 @@ func run() error {
 		return runForward(ctx, args[1:])
 	}
 
+	// `version` is dispatched here, above config.Load, for the same reason
+	// `forward` is: asking what version a binary is must not require a
+	// database URL. It also has to work before anything else does, because
+	// it is the first thing a packager runs -- the Homebrew formula's test
+	// block is literally `hooklens version`, so a version command that needs
+	// configuration is a failing `brew install`.
+	if args := os.Args[1:]; len(args) > 0 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v") {
+		fmt.Println("hooklens", version)
+		return nil
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -71,7 +82,7 @@ func run() error {
 		case "serve":
 			// Explicit form of the default.
 		default:
-			return fmt.Errorf("unknown command %q (want serve, migrate or forward)", args[0])
+			return fmt.Errorf("unknown command %q (want serve, migrate, forward or version)", args[0])
 		}
 	}
 

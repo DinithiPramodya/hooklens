@@ -212,5 +212,6 @@ rejected, and a walkthrough of the code. Written as it was built, in build order
 - [32 — Counters, gauges, histograms, and why p99](docs/learn/32-metrics.md)
 - [33 — Load testing, and what "dropped" actually means](docs/learn/33-load-testing.md)
 - [34 — Caching the inbox lookup, and the part everyone gets wrong](docs/learn/34-caching-and-invalidation.md)
+- [35 — Cross-compilation, static binaries, and how a `brew install` works](docs/learn/35-release-and-distribution.md)
 
 End-of-phase quizzes and their assessments are in [`docs/QUIZ.md`](docs/QUIZ.md).
