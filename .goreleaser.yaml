@@ -81,6 +81,11 @@ archives:
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     files:
+      # LICENSE travels inside every archive, not just in the repository. MIT's
+      # one real condition is that the notice accompanies copies of the
+      # software -- and an archive IS a copy. Shipping a binary without it would
+      # breach our own licence on the first download.
+      - LICENSE
       - README.md
       - docs/learn/README.md
 
@@ -152,11 +157,11 @@ brews:
     directory: Formula
     homepage: https://github.com/DinithiPramodya/hooklens
     description: A webhook inspector with a self-hosted tunnel to localhost.
-    # license: intentionally absent. The repository declares no licence yet,
-    # and choosing one is the author's decision, not the build tool's. Homebrew
-    # and Scoop both accept a manifest without it; this must be filled in
-    # before the first public release, because "no licence" legally means "all
-    # rights reserved" and nobody may use what they just installed.
+    # The SPDX identifier, not the prose. This is the field Homebrew and the
+    # corporate licence scanners that gate installs actually read; it must
+    # match LICENSE, and the two are the only places the choice is stated.
+    # docs/learn/38-licensing.md
+    license: MIT
     # No dependencies. The binary is static and carries its UI; the only
     # external requirement is a Postgres to point it at, which is a runtime
     # concern and not something a formula should install for you.
@@ -173,8 +178,4 @@ scoops:
       token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
     homepage: https://github.com/DinithiPramodya/hooklens
     description: A webhook inspector with a self-hosted tunnel to localhost.
-    # license: intentionally absent. The repository declares no licence yet,
-    # and choosing one is the author's decision, not the build tool's. Homebrew
-    # and Scoop both accept a manifest without it; this must be filled in
-    # before the first public release, because "no licence" legally means "all
-    # rights reserved" and nobody may use what they just installed.
+    license: MIT

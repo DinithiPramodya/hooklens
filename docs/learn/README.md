@@ -129,19 +129,21 @@ database round trip.*
 |---|---|---|
 | 36 | [The README as a product page](36-the-readme-as-a-product-page.md) | Ordering by the reader's questions, not the system's structure · time-to-first-success · why the demo outranks every paragraph · a status line that does not rot |
 | 37 | [Why the retention sweep could not use an index](37-indexable-predicates.md) | Sargable predicates · why a filter that depends on a joined row defeats both the index and the `LIMIT` · denormalising to make a predicate indexable, and who then maintains the copy · 276ms → 0.75ms |
+| 38 | [What a licence actually does](38-licensing.md) | Copyright is automatic and default-deny · a licence as a conditional grant, not a transfer · why breaching a condition is infringement and not breach of contract · the warranty disclaimer as the author-facing clause · why relicensing gets more expensive with every contributor |
+| 39 | [Where it runs](39-where-it-runs.md) | Deploy config as reproducible infrastructure · a platform vs. a rented box, layer by layer · why the wildcard forces DNS-01 either way · scale-to-zero as a correctness bug for capture · the single-replica constraint the tunnel imposes |
 
 ---
 
 ## Still to come
 
-**The rest of Phase 6.** The demo GIF, `DECISIONS.md`
-(written by hand, from memory, per `CLAUDE.md`), and dogfooding: pointing real
-repository webhooks at a running instance and leaving it there.
+**The rest of Phase 6**, all of it the author's: the demo GIF, `DECISIONS.md`
+(written by hand, from memory, per `CLAUDE.md`), and the launch posts.
 
-Two things block the first public release, both recorded in
-[35](35-release-and-distribution.md) and neither decidable here:
+Dogfooding on a hosted instance is **deliberately not happening** — hosting costs
+money and this is a portfolio project. [39](39-where-it-runs.md) records what that
+gives up and the zero-cost way to revisit it.
 
-- **No licence.** The repository declares none, which legally means all rights
-  reserved — nobody who installs it may use it. This is the author's call.
-- **The tap and bucket do not exist.** `homebrew-tap` and `scoop-bucket` are
-  separate GitHub repositories, each needing a PAT in this repository's secrets.
+One thing still blocks a packaged release: **the tap and bucket do not exist.**
+`homebrew-tap` and `scoop-bucket` are separate GitHub repositories, each needing a
+PAT in this repository's secrets. The licence, the other former blocker, is settled
+— MIT, see [38](38-licensing.md).

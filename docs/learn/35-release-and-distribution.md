@@ -130,6 +130,8 @@ being blunt about the consequence: "no licence" legally means *all rights reserv
 so anybody who runs `brew install` has no permission to use what they installed.
 This has to be settled before Phase 6, and it is the one item in this unit that
 cannot be decided here.
+*Resolved in Phase 6: the author chose MIT, and `license: MIT` now fills both fields
+— see [38](38-licensing.md).*
 
 **Tags trigger releases, not pushes to main.**
 `on: push: tags: ["v*"]`. Publishing a release per merge is how a version number

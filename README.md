@@ -15,8 +15,8 @@ deliveries, and check the provider's signature. One binary, self-hosted, no acco
       ![hooklens capturing a webhook and forwarding it to localhost](docs/demo.gif)
 -->
 
-> **Not yet released.** The code is complete through hardening; packaging is written
-> but no version has been tagged, and the repository carries no licence yet — see
+> **Not yet released.** The code is complete through hardening and MIT-licensed;
+> packaging is written but no version has been tagged — see
 > [what is still open](#what-is-still-open). Build from source today.
 
 ---
@@ -201,8 +201,8 @@ The token is shown once, at creation, and stored only as a hash.
 
 ## What is still open
 
-- **No licence.** The repository declares none, which legally means all rights
-  reserved. This has to be settled before anybody can use a release.
+- **No hosted instance.** hooklens is self-hosted and there is no public demo
+  server; run it yourself with the quickstart above.
 - **No tagged release**, and therefore no Homebrew tap or Scoop bucket. The
   configuration exists and has not been executed.
 - **The load test's throughput target is not met on the development machine** —
@@ -323,7 +323,7 @@ carries many requests without leaking a goroutine, and
 2.5x bottleneck in a column nobody reads.
 
 <details>
-<summary>All 37 notes, in build order</summary>
+<summary>All 39 notes, in build order</summary>
 
 - [01 — Webhooks, and the HTTP underneath](docs/learn/01-webhooks-and-http.md)
 - [02 — Containers, images, and Compose](docs/learn/02-containers.md)
@@ -362,8 +362,14 @@ carries many requests without leaking a goroutine, and
 - [35 — Cross-compilation, static binaries, and how a `brew install` works](docs/learn/35-release-and-distribution.md)
 - [36 — The README as a product page](docs/learn/36-the-readme-as-a-product-page.md)
 - [37 — Why the retention sweep could not use an index](docs/learn/37-indexable-predicates.md)
+- [38 — What a licence actually does](docs/learn/38-licensing.md)
+- [39 — Where it runs: a platform vs. a box you own](docs/learn/39-where-it-runs.md)
 
 </details>
 
 The build plan is [PLAN.md](PLAN.md); the working agreement that produced the notes is
 [CLAUDE.md](CLAUDE.md).
+
+## Licence
+
+[MIT](LICENSE). Use it, change it, ship it, sell it — keep the notice attached.
