@@ -33,19 +33,32 @@ deliveries, and check the provider's signature. One binary, self-hosted, no acco
 
 ## Quickstart
 
-Three commands and a `curl`, assuming Docker and Go.
+Needs Git, Go, Node 24+ and Docker. One command per line, so these work as written
+in bash, zsh and Windows PowerShell alike.
 
 ```sh
-git clone https://github.com/DinithiPramodya/hooklens && cd hooklens
-cd web && npm ci && npm run build && cd ..   # the UI is compiled INTO the binary
-docker compose up -d --wait                  # Postgres
-go run ./cmd/hooklens migrate up && go run ./cmd/hooklens
+git clone https://github.com/DinithiPramodya/hooklens
+cd hooklens
+cd web
+npm ci
+npm run build                      # the UI is compiled INTO the binary, so build it first
+cd ..
+docker compose up -d --wait        # Postgres
+go run ./cmd/hooklens migrate up
+go run ./cmd/hooklens              # leave this running
 ```
 
-Open <http://localhost:8080>, click to create an inbox, and send it something:
+Open <http://localhost:8080>, click **Create an inbox**, and send it something from a
+second terminal. Replace `YOUR-SLUG` with the code shown after `/e/`:
 
 ```sh
-curl -X POST localhost:8080/e/$SLUG/webhook -d '{"hello":"world"}'
+# macOS, Linux, Git Bash
+curl -X POST localhost:8080/e/YOUR-SLUG/webhook -H 'Content-Type: application/json' -d '{"hello":"world"}'
+```
+
+```powershell
+# Windows PowerShell -- where `curl` is a different command
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/e/YOUR-SLUG/webhook -ContentType application/json -Body '{"hello":"world"}'
 ```
 
 It appears in the list before you switch windows back.
@@ -72,6 +85,10 @@ is saved under your user config directory (mode 0600 — it holds a token), so t
 If your app is not running, the sender still gets a 2xx and the capture is stored with
 `forward_error: unreachable`. A delivery failure on our side must never make a provider
 retry or disable your endpoint.
+
+**On Windows**, the `http://….localhost/` address above won't open: Windows doesn't
+resolve `*.localhost` subdomains. Use the path form for the same inbox instead —
+`http://localhost:8080/e/632xap2u4zmm64zx3oqnxyhlzq/` — which reaches it identically.
 
 ### Once there is a release
 
@@ -185,16 +202,31 @@ All from the environment, with defaults that work on a clean machine.
 ### The two URL forms
 
 ```sh
-curl -X POST localhost:8080/e/$SLUG/webhook  -d '{"hello":"world"}'
-curl -X POST localhost:8080/webhook -H "Host: $SLUG.localhost" -d '{"hello":"world"}'
+# macOS, Linux, Git Bash
+curl -X POST localhost:8080/e/YOUR-SLUG/webhook  -d '{"hello":"world"}'
+curl -X POST localhost:8080/webhook -H "Host: YOUR-SLUG.localhost" -d '{"hello":"world"}'
+```
+
+```powershell
+# Windows PowerShell
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/e/YOUR-SLUG/webhook -Body '{"hello":"world"}'
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/webhook -Headers @{ Host = 'YOUR-SLUG.localhost' } -Body '{"hello":"world"}'
 ```
 
 Both reach the same inbox. The subdomain form is what a provider uses in production;
 the path form works anywhere and needs no wildcard DNS, which is why local development
-uses it. Capturing never needs a token — the URL *is* the capability. Reading does:
+uses it.
+
+Capturing never needs a token — the URL *is* the capability. Reading does:
 
 ```sh
-curl -H "Authorization: Bearer $TOKEN" localhost:8080/api/endpoints/$SLUG/requests
+# macOS, Linux, Git Bash
+curl -H "Authorization: Bearer YOUR-TOKEN" localhost:8080/api/endpoints/YOUR-SLUG/requests
+```
+
+```powershell
+# Windows PowerShell
+Invoke-RestMethod -Uri http://localhost:8080/api/endpoints/YOUR-SLUG/requests -Headers @{ Authorization = 'Bearer YOUR-TOKEN' }
 ```
 
 The token is shown once, at creation, and stored only as a hash.
@@ -226,7 +258,9 @@ gofmt -l .
 go vet ./...
 golangci-lint run ./...       # v2.13.2, pinned to match CI
 go test ./... -count=1
-cd web && npm test && cd ..   # frontend: node --test, no runner dependency
+cd web
+npm test                      # frontend: node --test, no runner dependency
+cd ..
 ```
 
 These are the same gates CI runs. Skipping the lint step locally is how CI stayed

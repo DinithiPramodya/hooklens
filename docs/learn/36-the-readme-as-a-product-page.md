@@ -270,3 +270,23 @@ looking at the one frame an image viewer shows. The final recording hovers after
 webhook to force a frame, and exports without click markers.
 
 Final: 15 frames, 767×639, about 17 seconds a loop, 1.2 MB.
+
+### Postscript — the quickstart didn't run on Windows
+
+The quickstart this unit wrote failed in Windows PowerShell 5.1, the default shell on
+every Windows machine — including the author's. Checked there, not assumed: `&&` is a
+parse error (it arrived in PowerShell 7), `curl` is an alias for `Invoke-WebRequest`
+(`A parameter cannot be found that matches parameter name 'X'`), and `$SLUG` is an
+empty PowerShell variable, which silently drops the inbox from the URL.
+
+**Fixed by writing commands that work in every shell, not by adding a Windows copy.**
+One command per line runs identically in bash, zsh and PowerShell, so setup needs no
+second version. Only sending HTTP requests really differs, and gets a
+PowerShell block beside the curl one. `YOUR-SLUG` replaces `$SLUG`: a placeholder is
+clearer on every platform than a variable nobody set. A parallel Windows section was
+rejected because it doubles every command, and the copies drift the first time one is
+edited without the other.
+
+One claim was corrected before it shipped: the draft said `Invoke-RestMethod` refuses a
+custom `Host` header, from memory. Tested against a local echo server, it sends it
+exactly. The README gives the working command instead of a Git Bash workaround.

@@ -148,3 +148,4 @@ beat, and the signal that would make it the wrong call. The reasoning in full is
 | Browser stream stops on 401/403 and shows "inbox not found" [40] | Retrying every failure forever | The server uses 401 for something transient |
 | CLI inspect link carries the inbox in the URL fragment [40] | Query string (logs, Referer); one-time exchange code | hooklens is hosted and links get pasted into chat |
 | A link asks before replacing a different stored inbox [40] | Silently switching (the old token is unrecoverable) | The browser remembers several inboxes |
+| Quickstart written one command per line, PowerShell blocks only for HTTP requests [36] | A parallel Windows section | — |
