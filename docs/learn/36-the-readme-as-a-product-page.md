@@ -242,3 +242,31 @@ Two things the recording found, which is the argument for making one at all:
 - **The footer still said "Phase 3".** A status line in the UI rots exactly like
   the one this unit removed from the README. It now tells users that shift-click
   compares two captures, which nothing else on the page mentioned.
+
+### The re-take
+
+The first GIF was replaced, because checking it frame by frame showed it was weaker
+than it looked: 1,536 px wide with the content in the middle 40% (so GitHub shrank
+the text to about 10 px), a red "not forwarded" box as the first thing in the detail
+pane, and a final click that missed after the page scrolled.
+
+The re-take ran with the tunnel attached to a local app, in a 767 px window, and it
+found two more things before it was right:
+
+- **The live delivery bug** recorded in [25](25-showing-delivery.md): a delivered
+  capture showed as not attempted until reload.
+- **The row list jumped on selection.** A hint line ("shift-click another capture…")
+  was rendered only once a row was selected, pushing every row down ~38 px under the
+  cursor — so a quick second click landed on the wrong capture, and the recorder drew
+  its click marker on the row that was *not* selected. The line is now always
+  reserved when there are two captures, and only its text is hidden
+  (`web/src/App.tsx`).
+
+And one lesson about the tool rather than the product: **the browser recorder saves a
+frame per action, not per screenshot.** The second attempt silently omitted the three
+frames that mattered most — webhooks arriving — because they happened between
+actions. It was only caught by decoding the GIF and reading every frame, not by
+looking at the one frame an image viewer shows. The final recording hovers after each
+webhook to force a frame, and exports without click markers.
+
+Final: 15 frames, 767×639, about 17 seconds a loop, 1.2 MB.

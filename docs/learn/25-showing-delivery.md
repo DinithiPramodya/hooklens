@@ -180,3 +180,38 @@ reconnect is a dead socket with nobody reading it. There is no fight because the
 second reader. The two cases look identical at the protocol level and are completely
 different in practice, which is why the classification had to be made deliberately rather
 than by pattern-matching on "is this the client's fault".
+
+---
+
+## Postscript — the live view never learned the outcome
+
+Found in Phase 6, recording the README demo with a real tunnel attached: a webhook
+was delivered to the local app — `X-Hooklens-Forward: delivered`, and the database
+held `forward_status 200, forward_ms 90` — yet the open browser showed the capture as
+*not attempted*, under the notice telling the user to start the tunnel they were
+already running. A reload showed the truth.
+
+**The cause is an ordering this unit never examined.** The `capture` stream event is
+published the moment the request is stored, deliberately *before* forwarding, so the
+row appears in milliseconds instead of after a round trip to a laptop. Nothing ever
+published the outcome afterwards. Every test of this unit rendered captures fetched
+from the API, which carry the outcome — none watched a capture arrive live and then
+get delivered, which is the only path that shows it.
+
+**The fix is a second, small event.** `ingest.publishDelivery`
+(`internal/ingest/ingest.go`) sends `delivery` with `{id, forward_status |
+forward_error, forward_ms}` once `RecordForward` has succeeded — only then, so an open
+browser never shows a state a reload would contradict. The client patches the row and
+any open detail pane in place (`applyDelivery` / `withDelivery` in
+`web/src/lib/delivery.ts`), replacing the three outcome fields *as a set*, because a
+stale `forward_error` left beside a new `forward_status` would make `deliveryOf` report
+a failure for a delivered capture.
+
+**Rejected:** publishing the capture event after the forward. One event instead of
+two, and it makes the list only as live as the slowest local handler — up to 30
+seconds of a webhook that has arrived but is not on screen.
+
+**Tests:** three in `internal/ingest/delivery_event_test.go` (success, failure, no
+subscribers — including that absent fields are omitted, not null) and four in
+`web/src/lib/delivery.test.ts` (marks delivered, no-op for an unlisted row, replaces
+a stale error, does not mutate).

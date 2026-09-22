@@ -104,8 +104,18 @@ export default function App() {
         {/* Said once, not on every row. "No tunnel" is the normal state of an
             inbox used for inspection, so repeating it per capture would paint
             a working system as broken. */}
-        {selected && !compareWith && requests.length > 1 && (
-          <p className="muted tiny">
+        {/* The line is reserved whenever there are two captures to compare,
+            and only its TEXT comes and goes. Rendering the paragraph itself
+            conditionally made it appear on the click that selected a row --
+            pushing every row down ~38px under the cursor, so a quick second
+            click landed on the wrong capture. Found in the demo recording,
+            where the click marker ended up on the row that was NOT selected. */}
+        {requests.length > 1 && (
+          <p
+            className="muted tiny"
+            style={{ visibility: selected && !compareWith ? 'visible' : 'hidden' }}
+            aria-hidden={!(selected && !compareWith)}
+          >
             shift-click another capture to compare it with this one
           </p>
         )}

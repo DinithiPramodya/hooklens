@@ -143,3 +143,5 @@ beat, and the signal that would make it the wrong call. The reasoning in full is
 | Index built inside the migration transaction [37] | `CREATE INDEX CONCURRENTLY` | The table is large enough that the lock is an outage |
 | MIT licence, shipped inside every archive [38] | Apache-2.0; AGPL-3.0 | Hosted resale becomes a concern |
 | Not hosted [39] | Fly.io; a VPS | A reason to spend money, or a free always-on tier that does not scale to zero |
+| Forward outcome sent as a second live `delivery` event, after it is stored [25] | Delaying the capture event until after the forward | — |
+| Compare hint's line always reserved; only its text toggles [36] | Rendering the line on selection (rows jumped under the cursor) | — |

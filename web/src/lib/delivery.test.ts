@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { deliveryBadge, deliveryOf, formatMs } from './delivery.ts'
+import { applyDelivery, deliveryBadge, deliveryOf, formatMs } from './delivery.ts'
 import type { CaptureSummary } from './api.ts'
 
 function capture(extra: Partial<CaptureSummary> = {}): CaptureSummary {
@@ -101,4 +101,35 @@ test('formatMs is readable at both scales', () => {
   assert.equal(formatMs(999), '999ms')
   assert.equal(formatMs(1500), '1.5s')
   assert.equal(formatMs(undefined), '')
+})
+
+// ---- live delivery updates ----
+//
+// Regression tests for the stale live view: the capture event is sent before
+// the forward, so without these the row stayed "not attempted" until reload.
+
+test('applyDelivery marks a not-attempted capture as delivered', () => {
+  const rows = [capture({ id: 'a' }), capture({ id: 'b' })]
+  const next = applyDelivery(rows, { id: 'b', forward_status: 200, forward_ms: 90 })
+  assert.equal(deliveryOf(next[1]).kind, 'delivered')
+  assert.equal(next[1].forward_ms, 90)
+  assert.equal(deliveryOf(next[0]).kind, 'none', 'the other row is untouched')
+})
+
+test('applyDelivery returns the same array when the capture is not listed', () => {
+  const rows = [capture({ id: 'a' })]
+  assert.equal(applyDelivery(rows, { id: 'zzz', forward_status: 200 }), rows)
+})
+
+test('applyDelivery replaces the outcome as a set, never leaving a stale error', () => {
+  const rows = [capture({ id: 'a', forward_error: 'timeout', forward_ms: 30000 })]
+  const next = applyDelivery(rows, { id: 'a', forward_status: 200, forward_ms: 12 })
+  assert.equal(next[0].forward_error, undefined)
+  assert.equal(deliveryOf(next[0]).kind, 'delivered')
+})
+
+test('applyDelivery does not mutate its input', () => {
+  const rows = [capture({ id: 'a' })]
+  applyDelivery(rows, { id: 'a', forward_status: 200 })
+  assert.equal(rows[0].forward_status, undefined)
 })

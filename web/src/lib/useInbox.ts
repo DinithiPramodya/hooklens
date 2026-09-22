@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getRequest, keys, listRequests, type CaptureSummary, type Inbox, type Page } from './api'
+import { getRequest, keys, listRequests, type CaptureDetail, type CaptureSummary, type Inbox, type Page } from './api'
+import { applyDelivery, withDelivery, type DeliveryEvent } from './delivery'
 import { streamEvents } from './sse'
 
 const STORAGE_KEY = 'hooklens.inbox'
@@ -58,9 +59,12 @@ export function useRequests(inbox: Inbox | null) {
  * One capture in full, fetched on demand when a row is selected.
  *
  * `staleTime: Infinity` is not a tuning choice here, it is a fact about the
- * data: a captured request is immutable. Once stored it never changes, so a
- * cached copy can never go stale and refetching could only ever return the
- * same bytes. This is the rare case where caching forever is simply correct.
+ * data: the captured request itself is immutable, so refetching could only
+ * ever return the same bytes. The one exception is the forwarding outcome,
+ * which is recorded AFTER the capture -- and it is not left to go stale: the
+ * stream's `delivery` event patches this cache entry directly (see
+ * useLiveCaptures). Caching forever is correct because something else keeps
+ * the one mutable part current.
  */
 export function useRequest(id: string | null, inbox: Inbox | null) {
   return useQuery({
@@ -113,6 +117,26 @@ export function useLiveCaptures(inbox: Inbox | null) {
           } catch {
             setDropped((n) => n + 1)
           }
+          return
+        }
+        if (e.event === 'delivery') {
+          // A forward's outcome, sent after the capture's own event because
+          // the capture is broadcast before forwarding starts. Without this
+          // the row stayed "not attempted" until a reload, under a notice
+          // telling the user to start the tunnel they were already running.
+          let d: DeliveryEvent
+          try {
+            d = JSON.parse(e.data) as DeliveryEvent
+          } catch {
+            return
+          }
+          qc.setQueryData<Page>(keys.requests(inbox.slug), (prev) =>
+            prev ? { ...prev, requests: applyDelivery(prev.requests, d) } : prev,
+          )
+          // The detail pane has its own cache entry for an open capture.
+          qc.setQueryData<CaptureDetail>(keys.request(d.id), (prev) =>
+            prev ? withDelivery(prev, d) : prev,
+          )
           return
         }
         if (e.event !== 'capture') return

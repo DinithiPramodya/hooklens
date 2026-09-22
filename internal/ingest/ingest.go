@@ -271,6 +271,10 @@ func (h *Handler) capture(w http.ResponseWriter, r *http.Request) {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		if err := h.store.RecordForward(rctx, id, fo.out); err != nil {
 			h.log.Warn("record forward failed", "inbox", slug, "id", id, "err", err)
+		} else {
+			// Only after the outcome is durable, so an open browser never shows
+			// a delivery state that a reload would contradict.
+			h.publishDelivery(ep.ID, id, fo.out)
 		}
 		cancel()
 	}
@@ -344,6 +348,44 @@ func (h *Handler) publish(endpointID, requestID string, req *capture.Request) {
 	}
 
 	h.broker.Publish(endpointID, broker.Message{Event: "capture", Data: string(payload)})
+}
+
+// publishDelivery tells open browsers how a capture's forward turned out.
+//
+// A second event, because the first one cannot carry it. The `capture` event
+// is published the moment the request is stored -- before forwarding starts --
+// so a live list shows the row within milliseconds rather than after a round
+// trip to a laptop that may take thirty seconds. The cost of that ordering was
+// a real bug: nothing ever sent the OUTCOME, so a capture delivered to the
+// developer's app (200, 90 ms, confirmed in the database) sat in the live
+// list looking "not attempted", under a notice telling the user to run the
+// tunnel they were already running. Correct only after a reload. Found while
+// recording the README demo. See docs/learn/25-showing-delivery.md.
+//
+// The rejected alternative was delaying the capture event until after the
+// forward, which makes the list only as live as the slowest local handler.
+//
+// Absent fields are OMITTED, not null, matching the list endpoint: the
+// frontend distinguishes "not attempted" from failure by absence
+// (web/src/lib/delivery.ts), and a null would be a fourth state.
+func (h *Handler) publishDelivery(endpointID, requestID string, out store.ForwardOutcome) {
+	if h.broker == nil || h.broker.Subscribers(endpointID) == 0 {
+		return
+	}
+
+	ev := map[string]any{"id": requestID, "forward_ms": out.Elapsed}
+	if out.Error != "" {
+		ev["forward_error"] = out.Error
+	} else {
+		ev["forward_status"] = out.Status
+	}
+
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		h.log.Error("marshal delivery event", "err", err)
+		return
+	}
+	h.broker.Publish(endpointID, broker.Message{Event: "delivery", Data: string(payload)})
 }
 
 // Forwarder hands a captured request to a connected tunnel.

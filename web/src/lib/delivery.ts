@@ -105,3 +105,40 @@ export function formatMs(ms?: number): string {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
 }
+
+/**
+ * The payload of a `delivery` stream event: a forward's outcome, sent after
+ * the capture's own event, once the outcome is stored.
+ */
+export type DeliveryEvent = Pick<CaptureSummary, 'id' | 'forward_status' | 'forward_error' | 'forward_ms'>
+
+/**
+ * Applies a delivery outcome to the one capture it belongs to.
+ *
+ * Returns the SAME array when the capture is not in it -- so a caller passing
+ * this to TanStack Query's setQueryData causes no re-render for an event about
+ * a row that is not on screen. That happens legitimately: the capture's own
+ * event may have been dropped for a slow tab, or the first page fetch may not
+ * have returned yet (and will include the outcome when it does).
+ *
+ * The outcome fields are REPLACED as a set, not merged, because they are
+ * mutually exclusive: a stale forward_error left beside a new forward_status
+ * would make deliveryOf report a failure for a delivered capture.
+ */
+export function applyDelivery<T extends CaptureSummary>(rows: T[], d: DeliveryEvent): T[] {
+  const i = rows.findIndex((r) => r.id === d.id)
+  if (i < 0) return rows
+  const next = rows.slice()
+  next[i] = withDelivery(rows[i], d)
+  return next
+}
+
+/** The same replacement for a single capture, e.g. the cached detail view. */
+export function withDelivery<T extends CaptureSummary>(row: T, d: DeliveryEvent): T {
+  const { forward_status: _s, forward_error: _e, forward_ms: _m, ...rest } = row
+  const out = { ...rest } as T
+  if (d.forward_status !== undefined) out.forward_status = d.forward_status
+  if (d.forward_error !== undefined) out.forward_error = d.forward_error
+  if (d.forward_ms !== undefined) out.forward_ms = d.forward_ms
+  return out
+}
