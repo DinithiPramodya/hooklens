@@ -213,7 +213,7 @@ func Run(ctx context.Context, cfg Config) *Result {
 				// a slice: 60,000 response bodies retained would measure the
 				// generator's garbage collector.
 				_, _ = io.Copy(io.Discard, resp.Body)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 
 				res.mu.Lock()
 				res.ByStatus[resp.StatusCode]++

@@ -165,7 +165,7 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 	// on every return. Close performs a closing handshake and can block; by
 	// the time this defer runs we have either already closed politely or we
 	// are giving up, and neither wants to wait on a peer that may be gone.
-	defer c.CloseNow()
+	defer func() { _ = c.CloseNow() }()
 
 	c.SetReadLimit(handshakeReadLimit)
 

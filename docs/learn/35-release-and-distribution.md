@@ -207,7 +207,7 @@ accepting `version`, `--version` and `-v` because all three are what people type
   green.
 - `go run ./cmd/hooklens version` prints `hooklens dev` — correct for a build from a
   working tree with no tag.
-- **Cross-compilation, partially verified.** With `CGO_ENABLED=0 -trimpath -ldflags
+- **Cross-compilation, all five targets.** With `CGO_ENABLED=0 -trimpath -ldflags
   "-s -w -X main.version=..."`:
 
   | target | result | size |
@@ -215,25 +215,30 @@ accepting `version`, `--version` and `-v` because all three are what people type
   | linux/amd64 | built | 12M |
   | linux/arm64 | built | 12M |
   | darwin/amd64 | built | 13M |
-  | darwin/arm64 | **not verified** | — |
-  | windows/amd64 | **not verified** | — |
+  | darwin/arm64 | built | 12M |
+  | windows/amd64 | built, and runs: `hooklens v0.0.0-test` | 13M |
 
-  The run was stopped part-way by the machine running out of memory — the
+  The first attempt was stopped part-way by the machine running out of memory: the
   `darwin/arm64` line failed with a bare `compile.exe: exit status 1` from
-  `internal/poll` and no diagnostic, which is the signature of the compiler being
-  killed rather than of a compile error, and `windows/amd64` never ran. I am
-  recording this as unverified rather than inferring success from the other three:
-  `darwin/arm64` shares its `GOOS` with a target that built and its `GOARCH` with
-  another, which is suggestive and is not evidence.
+  `internal/poll` and no diagnostic, and `windows/amd64` never ran. At the time I
+  recorded both as unverified rather than inferring success from the other three —
+  `darwin/arm64` shared its `GOOS` with one target that built and its `GOARCH` with
+  another, which was suggestive and was not evidence. Both were re-run on their own
+  the next session and built clean, which confirms the first failure was the
+  compiler being killed and not a compile error. The windows binary is the only one
+  that can execute on this machine, and it prints the injected version, so
+  `-ldflags -X` is verified end to end rather than assumed.
 
-  To finish the check when the machine has room:
-
-  ```sh
-  for t in darwin/arm64 windows/amd64; do
-    CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath \
-      -ldflags "-s -w -X main.version=v0.0.0-test" -o /tmp/hooklens ./cmd/hooklens
-  done
-  ```
+- **Fresh-clone check.** The committed tree, exported with `git archive` so nothing
+  from the working directory leaked in, and the README's quickstart run against it
+  exactly as written. Two things worth recording from it:
+  - With `internal/webui/dist` holding only `.gitkeep`, `go build` **succeeds** and
+    produces a 17.7MB binary with no UI. The silent failure the before-hook in
+    `.goreleaser.yaml` guards against is real, not hypothetical.
+  - After `npm ci && npm run build`, the binary serves the embedded UI, both capture
+    URL forms return 200, reads 401 without the token, and a webhook through
+    `hooklens forward` comes back carrying the local app's own status (418), headers
+    and body.
 
 - **Not verifiable here, and stated rather than glossed:** `goreleaser` is not
   installed on this machine, so the config has not been run through
@@ -241,5 +246,19 @@ accepting `version`, `--version` and `-v` because all three are what people type
   against the v2 schema. The first tagged release will be the first execution of
   this file, which is the normal situation for release automation and is still worth
   saying out loud. Neither the Homebrew tap nor the Scoop bucket repository exists
-  yet, and neither PAT has been created — both are GitHub-side setup, and this
-  session is not pushing anything.
+  yet, and neither PAT has been created — both are GitHub-side setup. The code is
+  pushed; no tag has been cut, so the release workflow has never run.
+
+- **CI had been red for six pushes, and nobody looked.** Checking the Actions history
+  after pushing this unit showed the `lint` job failing on every push since the first
+  Phase 3 commit — nine `errcheck` findings on ignored `Close` errors, plus one
+  staticcheck suggestion. The `test` job, including the race detector against real
+  Postgres, passed throughout; so did the Docker build. Nothing was broken. But a
+  gate that goes red and stays red is not a gate, and every "the suite is green" in
+  these notes meant the *local* suite — true, and a narrower claim than it sounded.
+  Each finding was a close or cleanup whose error carries nothing actionable, so each
+  became an explicit `_ =` discard, the idiom `closeWith` already used. Deliberately
+  *not* an `exclude-functions` rule in `.golangci.yml`: that would also silence the
+  next `Close` that matters, such as closing a file being written, where the error is
+  the only sign the write failed. The linter is pinned (`v2.13.2`) and now runs
+  locally, with and without the `loadtest` tag, and reports 0 issues.

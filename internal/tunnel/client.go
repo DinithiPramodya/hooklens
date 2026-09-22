@@ -177,7 +177,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("connect to %s: %w", c.opt.ServerURL, err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 
 	// Response bodies from the local app go OUT, but request bodies come IN,
 	// so the read limit has to accommodate a capture plus base64 expansion --
@@ -403,7 +403,7 @@ func (c *Client) callLocal(ctx context.Context, req Request) Response {
 		// endpoint.
 		return Response{Error: ShortError(err)}
 	}
-	defer hresp.Body.Close()
+	defer func() { _ = hresp.Body.Close() }()
 
 	// Bounded, for the same reason every read in this codebase is bounded --
 	// but bounded at the BODY limit, not the frame limit. Reading up to the

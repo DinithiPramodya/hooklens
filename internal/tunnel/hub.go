@@ -287,6 +287,6 @@ func (h *Hub) DropForTest(endpointID string) {
 	c := h.clients[endpointID]
 	h.mu.Unlock()
 	if c != nil {
-		c.conn.CloseNow()
+		_ = c.conn.CloseNow()
 	}
 }

@@ -100,7 +100,7 @@ func saveConfig(cfg *cliConfig) error {
 		return fmt.Errorf("write %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp) // best effort; the rename error below is the one that matters
 		return fmt.Errorf("replace %s: %w", path, err)
 	}
 	return nil
@@ -120,7 +120,7 @@ func createInbox(ctx context.Context, server string) (savedInbox, error) {
 	if err != nil {
 		return savedInbox{}, fmt.Errorf("create inbox: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))

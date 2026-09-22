@@ -233,7 +233,7 @@ func TestOutputIsSorted(t *testing.T) {
 
 	out := r.String()
 	ai, mi, zi := strings.Index(out, "aaa"), strings.Index(out, "mmm"), strings.Index(out, "zzz")
-	if !(ai < mi && mi < zi) {
+	if ai >= mi || mi >= zi {
 		t.Errorf("metrics are not sorted by name:\n%s", out)
 	}
 }

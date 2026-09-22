@@ -224,9 +224,13 @@ The token is shown once, at creation, and stored only as a hash.
 ```sh
 gofmt -l .
 go vet ./...
+golangci-lint run ./...       # v2.13.2, pinned to match CI
 go test ./... -count=1
 cd web && npm test && cd ..   # frontend: node --test, no runner dependency
 ```
+
+These are the same gates CI runs. Skipping the lint step locally is how CI stayed
+red for six pushes in Phase 3 without anyone noticing.
 
 ### The load test
 
