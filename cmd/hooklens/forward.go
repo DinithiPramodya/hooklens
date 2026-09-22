@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,7 +208,7 @@ func runForward(ctx context.Context, args []string) error {
 			connected = true
 			fmt.Printf("\n  forwarding  %s  ->  %s\n", publicURL, *to)
 			fmt.Printf("  inbox       %s\n", inbox.Slug)
-			fmt.Printf("  inspect     %s/\n\n", key)
+			fmt.Printf("  inspect     %s\n\n", inspectLink(key, inbox))
 			fmt.Printf("  ctrl-c to stop\n\n")
 		},
 		OnDisconnect: func(err error, retryIn time.Duration) {
@@ -243,4 +244,24 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// inspectLink is the URL that opens THIS inbox in the browser.
+//
+// Before it existed, the CLI printed the bare server URL under "inspect" --
+// which opened whatever inbox the browser happened to remember, not the one
+// the tunnel was using. Webhooks sent to the forward URL reached the local
+// app and were invisible in the UI, under a label promising otherwise. Found
+// while recording the README demo, where the two had to be linked by hand.
+//
+// The inbox rides in the URL FRAGMENT (#...), never a query string: browsers
+// do not send the fragment to any server, not in the request line and not in
+// the Referer header, so the token reaches the page's JavaScript and no
+// access log. The page reads it, stores it, and removes it from the address
+// bar at once (web/src/lib/handoff.ts). It does appear in this terminal --
+// which already holds the token on disk, so that is not a new exposure.
+// See docs/learn/40-dead-inboxes-and-handoff-links.md.
+func inspectLink(server string, inbox savedInbox) string {
+	frag := url.Values{"slug": {inbox.Slug}, "token": {inbox.Token}}
+	return strings.TrimRight(server, "/") + "/#" + frag.Encode()
 }

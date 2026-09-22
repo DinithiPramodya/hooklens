@@ -92,6 +92,7 @@ code {
 .dot { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: var(--muted); }
 .dot-live { background: var(--ok); }
 .dot-retrying { background: var(--err); }
+.dot-gone { background: var(--err); }
 .dot-connecting { background: var(--muted); }
 
 button.link {

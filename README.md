@@ -57,10 +57,14 @@ $ hooklens forward --to localhost:3000
 
   forwarding  http://632xap2u4zmm64zx3oqnxyhlzq.localhost/  ->  localhost:3000
   inbox       632xap2u4zmm64zx3oqnxyhlzq
-  inspect     http://localhost:8080/
+  inspect     http://localhost:8080/#slug=632xap2u4zmm64zx3oqnxyhlzq&token=…
 ```
 
-Anything sent to that URL is captured, then delivered to `localhost:3000`. The inbox
+Anything sent to that URL is captured, then delivered to `localhost:3000`. Open the
+**inspect** link to watch it in the browser: it carries this inbox after the `#`,
+which browsers never send to a server, and the page removes it from the address bar
+as soon as it has read it. If the browser was showing a different inbox, it asks
+before switching. The inbox
 is saved under your user config directory (mode 0600 — it holds a token), so the
 **URL is the same every run**. `--new` mints a fresh one; `--server` or
 `HOOKLENS_SERVER` points at a hosted instance.
@@ -320,7 +324,7 @@ carries many requests without leaking a goroutine, and
 2.5x bottleneck in a column nobody reads.
 
 <details>
-<summary>All 39 notes, in build order</summary>
+<summary>All 40 notes, in build order</summary>
 
 - [01 — Webhooks, and the HTTP underneath](docs/learn/01-webhooks-and-http.md)
 - [02 — Containers, images, and Compose](docs/learn/02-containers.md)
@@ -361,6 +365,7 @@ carries many requests without leaking a goroutine, and
 - [37 — Why the retention sweep could not use an index](docs/learn/37-indexable-predicates.md)
 - [38 — What a licence actually does](docs/learn/38-licensing.md)
 - [39 — Where it runs: a platform vs. a box you own](docs/learn/39-where-it-runs.md)
+- [40 — Knowing when to stop retrying, and handing a secret across a URL](docs/learn/40-dead-inboxes-and-handoff-links.md)
 
 </details>
 

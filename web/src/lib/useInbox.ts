@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getRequest, keys, listRequests, type CaptureDetail, type CaptureSummary, type Inbox, type Page } from './api'
 import { applyDelivery, withDelivery, type DeliveryEvent } from './delivery'
+import { handoffDecision, hashHasToken, inboxFromHash } from './handoff'
 import { streamEvents } from './sse'
 
 const STORAGE_KEY = 'hooklens.inbox'
@@ -33,7 +34,55 @@ export function useStoredInbox() {
     setInboxState(next)
   }, [])
 
-  return { inbox, setInbox }
+  // An inbox handed over by `hooklens forward`'s inspect link, waiting for the
+  // person to decide, because adopting it would forget a different inbox.
+  const [pending, setPending] = useState<Inbox | null>(null)
+
+  // The current inbox, readable from the hashchange listener below without
+  // re-subscribing it on every change (a stale closure would compare the link
+  // against whatever inbox was stored when the listener was attached).
+  const inboxRef = useRef(inbox)
+  inboxRef.current = inbox
+
+  // Read the link's fragment, then take the token OUT of the address bar
+  // immediately -- replaceState rewrites the current history entry instead of
+  // adding one -- so it is not left on screen, bookmarked, or shared by
+  // copying the URL. See lib/handoff.ts.
+  //
+  // On load AND on `hashchange`. Opening the link in a tab where hooklens is
+  // already open changes only the part after `#`, which browsers treat as a
+  // jump within the same page: no reload, no remount, so a mount-only read
+  // never saw it -- and the token stayed in the address bar. Found by opening
+  // the link during manual verification, not by a test.
+  useEffect(() => {
+    const handle = () => {
+      const hash = window.location.hash
+      const linked = inboxFromHash(hash)
+      if (hashHasToken(hash)) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      }
+      switch (handoffDecision(inboxRef.current, linked)) {
+        case 'adopt':
+          setInbox(linked)
+          break
+        case 'ask':
+          setPending(linked)
+          break
+      }
+    }
+    handle()
+    window.addEventListener('hashchange', handle)
+    return () => window.removeEventListener('hashchange', handle)
+  }, [setInbox])
+
+  const acceptPending = useCallback(() => {
+    if (pending) setInbox(pending)
+    setPending(null)
+  }, [pending, setInbox])
+
+  const dismissPending = useCallback(() => setPending(null), [])
+
+  return { inbox, setInbox, pending, acceptPending, dismissPending }
 }
 
 /**
@@ -76,7 +125,9 @@ export function useRequest(id: string | null, inbox: Inbox | null) {
   })
 }
 
-export type StreamStatus = 'idle' | 'connecting' | 'live' | 'retrying'
+// 'gone' is terminal: the server rejected this inbox's token, so the stream has
+// stopped rather than retrying something that cannot succeed.
+export type StreamStatus = 'idle' | 'connecting' | 'live' | 'retrying' | 'gone'
 
 /**
  * Subscribes to the inbox's event stream and writes arriving captures straight
@@ -107,6 +158,7 @@ export function useLiveCaptures(inbox: Inbox | null) {
     return streamEvents(`/api/endpoints/${inbox.slug}/stream`, inbox.token, {
       onOpen: () => setStatus('live'),
       onError: () => setStatus('retrying'),
+      onFatal: () => setStatus('gone'),
       onEvent: (e) => {
         if (e.event === 'dropped') {
           // The broker discarded events because this tab fell behind. Surfaced

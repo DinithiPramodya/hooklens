@@ -131,6 +131,7 @@ database round trip.*
 | 37 | [Why the retention sweep could not use an index](37-indexable-predicates.md) | Sargable predicates · why a filter that depends on a joined row defeats both the index and the `LIMIT` · denormalising to make a predicate indexable, and who then maintains the copy · 276ms → 0.75ms |
 | 38 | [What a licence actually does](38-licensing.md) | Copyright is automatic and default-deny · a licence as a conditional grant, not a transfer · why breaching a condition is infringement and not breach of contract · the warranty disclaimer as the author-facing clause · why relicensing gets more expensive with every contributor |
 | 39 | [Where it runs](39-where-it-runs.md) | Deploy config as reproducible infrastructure · a platform vs. a rented box, layer by layer · why the wildcard forces DNS-01 either way · scale-to-zero as a correctness bug for capture · the single-replica constraint the tunnel imposes |
+| 40 | [Dead inboxes and handoff links](40-dead-inboxes-and-handoff-links.md) | Which failures are permanent, and why retrying the rest is right · the URL fragment as a channel no server sees · asking before a link destroys something unrecoverable · a `hashchange` the first version missed |
 
 ---
 

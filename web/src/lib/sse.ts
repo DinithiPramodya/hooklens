@@ -29,6 +29,26 @@ export type StreamHandlers = {
   onEvent: (e: SSEEvent) => void
   onOpen?: () => void
   onError?: (err: unknown) => void
+  /** The server rejected the credential; the stream has stopped for good. */
+  onFatal?: (status: number) => void
+}
+
+/**
+ * Whether an HTTP status means retrying can never succeed.
+ *
+ * 401 and 403 say "this token is not accepted" -- the inbox was deleted, the
+ * database was reset, or the token is wrong -- and waiting changes none of
+ * that. Retrying them forever showed "retrying" beside a dead inbox
+ * indefinitely: a promise of recovery that could not come.
+ *
+ * Deliberately narrow. Everything else -- network errors, 5xx, a dropped
+ * stream -- may heal, and misclassifying one of THOSE as permanent would log
+ * every open tab out on a server restart, which is worse than the bug this
+ * fixes. The same split as the CLI's CloseError.Permanent().
+ * See docs/learn/40-dead-inboxes-and-handoff-links.md.
+ */
+export function isPermanentStatus(status: number): boolean {
+  return status === 401 || status === 403
 }
 
 /**
@@ -126,6 +146,12 @@ export function streamEvents(
           signal: controller.signal,
         })
 
+        if (isPermanentStatus(resp.status)) {
+          // Stop, and say so. No backoff, no further requests.
+          closed = true
+          handlers.onFatal?.(resp.status)
+          return
+        }
         if (!resp.ok || !resp.body) {
           throw new Error(`HTTP ${resp.status}`)
         }

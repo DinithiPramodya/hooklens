@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import { createInbox, type CaptureSummary } from './lib/api'
+import { ApiError, createInbox, type CaptureSummary } from './lib/api'
+import { isPermanentStatus } from './lib/sse'
 import { useLiveCaptures, useRequests, useStoredInbox } from './lib/useInbox'
 import { Detail } from './Detail'
 import { deliveryBadge, deliveryOf } from './lib/delivery'
 import { Diff } from './Diff'
 
 export default function App() {
-  const { inbox, setInbox } = useStoredInbox()
+  const { inbox, setInbox, pending, acceptPending, dismissPending } = useStoredInbox()
   const { status, dropped } = useLiveCaptures(inbox)
   const { data, isLoading, error } = useRequests(inbox)
   const [creating, setCreating] = useState(false)
@@ -54,6 +55,14 @@ export default function App() {
 
   const requests = data?.requests ?? []
 
+  // The server no longer accepts this inbox's token: it was deleted, the
+  // database was reset, or the token is wrong. Checked on both paths because
+  // either can be the one that finds out first. Previously this showed
+  // "retrying" plus a red error forever, and a curl hint for an inbox that
+  // could no longer receive anything.
+  const gone =
+    status === 'gone' || (error instanceof ApiError && isPermanentStatus(error.status))
+
   // Derived from the most recent capture rather than from a live signal,
   // because there is no "is a tunnel attached" endpoint -- and adding one
   // would be a second source of truth that could disagree with the rows.
@@ -79,9 +88,61 @@ export default function App() {
             forget
           </button>
         </div>
+        {pending && (
+          // Asked, never automatic: this browser remembers one inbox, and the
+          // current one's token cannot be recovered from the server.
+          <div className="notice">
+            <p>
+              This link opens inbox <code>{pending.slug}</code>. Open it here? This browser
+              will forget <code>{inbox.slug}</code>, and its token can&apos;t be recovered.
+            </p>
+            <div className="row">
+              <button
+                onClick={() => {
+                  setSelected(null)
+                  setCompareWith(null)
+                  acceptPending()
+                }}
+              >
+                Open linked inbox
+              </button>
+              <button className="link" onClick={dismissPending}>
+                keep this one
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
-      <section>
+      {gone && (
+        <section>
+          <h2>inbox not found</h2>
+          <p className="err">
+            The server doesn&apos;t recognise this inbox any more — it was deleted, the
+            database was reset, or this browser&apos;s token for it is wrong.
+          </p>
+          <p className="muted">
+            Its captures can&apos;t be read without that token, and tokens can&apos;t be
+            recovered. Start again with a new one.
+          </p>
+          <button
+            onClick={async () => {
+              setSelected(null)
+              setCompareWith(null)
+              await onCreate()
+            }}
+            disabled={creating}
+          >
+            {creating ? 'creating…' : 'Create a new inbox'}
+          </button>
+          {createError && <p className="err">{createError}</p>}
+        </section>
+      )}
+
+      {/* Hidden rather than unmounted when the inbox is gone: the "not found"
+          section above replaces it, and the error line and curl hint in here
+          would only contradict it. */}
+      <section hidden={gone}>
         <h2>
           captures{requests.length > 0 && ` (${requests.length})`}
         </h2>
@@ -101,9 +162,6 @@ export default function App() {
           </p>
         )}
 
-        {/* Said once, not on every row. "No tunnel" is the normal state of an
-            inbox used for inspection, so repeating it per capture would paint
-            a working system as broken. */}
         {/* The line is reserved whenever there are two captures to compare,
             and only its TEXT comes and goes. Rendering the paragraph itself
             conditionally made it appear on the click that selected a row --
@@ -120,6 +178,9 @@ export default function App() {
           </p>
         )}
 
+        {/* Said once, not on every row. "No tunnel" is the normal state of an
+            inbox used for inspection, so repeating it per capture would paint
+            a working system as broken. */}
         {noTunnel && (
           <p className="muted notice">
             captures are being stored but not forwarded — run{' '}

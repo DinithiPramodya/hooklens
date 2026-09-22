@@ -145,3 +145,6 @@ beat, and the signal that would make it the wrong call. The reasoning in full is
 | Not hosted [39] | Fly.io; a VPS | A reason to spend money, or a free always-on tier that does not scale to zero |
 | Forward outcome sent as a second live `delivery` event, after it is stored [25] | Delaying the capture event until after the forward | — |
 | Compare hint's line always reserved; only its text toggles [36] | Rendering the line on selection (rows jumped under the cursor) | — |
+| Browser stream stops on 401/403 and shows "inbox not found" [40] | Retrying every failure forever | The server uses 401 for something transient |
+| CLI inspect link carries the inbox in the URL fragment [40] | Query string (logs, Referer); one-time exchange code | hooklens is hosted and links get pasted into chat |
+| A link asks before replacing a different stored inbox [40] | Silently switching (the old token is unrecoverable) | The browser remembers several inboxes |
