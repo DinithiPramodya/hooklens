@@ -181,7 +181,10 @@ export default function App() {
         </div>
       </section>
 
-      <footer>Phase 3 — captures, live stream, detail pane and tunnel delivery.</footer>
+      {/* Was a build-phase status line, which went stale three phases running.
+          This says something a user needs instead: shift-click is the only way
+          to reach the diff, and nothing else on the page mentions it. */}
+      <footer>Click a capture to inspect it · shift-click a second one to compare the two.</footer>
     </main>
   )
 }

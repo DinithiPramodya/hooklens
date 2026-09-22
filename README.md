@@ -127,9 +127,10 @@ Two properties are worth knowing before you trust it with anything:
 - **Durability comes first.** Once a capture is stored, nothing downstream can turn
   the response into a non-2xx. A provider treats any non-2xx as "not delivered" and
   retries, so a late failure would give you a duplicate of an event already held.
-- **Nothing is silently truncated.** A body over the limit is refused with a clear
-  status rather than stored half-complete — a truncated payload looks valid and fails
-  signature verification for reasons nobody can see.
+- **Nothing is silently truncated.** A body over the limit is kept up to the limit
+  and visibly flagged as truncated, but never forwarded to your app — a cut-off
+  payload looks valid and fails parsing or signature checks for reasons nobody can
+  see. Raise `HOOKLENS_MAX_BODY` if you need more.
 
 ## Self-hosting
 
@@ -167,9 +168,11 @@ All from the environment, with defaults that work on a clean machine.
 | `HOOKLENS_ADDR` | `:8080` | Listen address |
 | `HOOKLENS_BASE_DOMAIN` | `localhost` | Domain the app is served from; one label in front of it is an inbox |
 | `DATABASE_URL` | matches `compose.yaml` | Postgres connection string |
-| `HOOKLENS_MAX_BODY` | `1MiB` | Largest body kept; bigger is refused, not truncated |
+| `HOOKLENS_MAX_BODY` | `1MiB` | Largest body kept; anything past it is cut off, flagged, and not forwarded |
 | `HOOKLENS_RATE_CREATE` | `10` | Inbox creations per IP per minute |
 | `HOOKLENS_RATE_CAPTURE` | `50` | Captures per inbox per second |
+| `HOOKLENS_TRUST_PROXY` | off | Set to `1` only behind a proxy that overwrites `X-Forwarded-For`; otherwise clients can spoof their IP |
+| `HOOKLENS_SWEEP_INTERVAL` | `5m` | How often expired captures are deleted |
 
 ### Commands
 
@@ -313,7 +316,8 @@ docs/learn/          how each piece works and why it was built this way
 [`docs/learn/`](docs/learn/) explains every piece: the concept, the alternatives that
 were rejected, and a walkthrough of the code. Written as it was built, in build order —
 [the index](docs/learn/README.md) groups them by phase. End-of-phase quizzes are in
-[`docs/QUIZ.md`](docs/QUIZ.md).
+[`docs/QUIZ.md`](docs/QUIZ.md), and [`DECISIONS.md`](DECISIONS.md) lists every design
+decision in one line each — what it beat, and when it would be wrong.
 
 If you read only three: [17 — NAT and firewalls](docs/learn/17-nat-and-firewalls.md)
 for why a tunnel has to exist at all, [19 — multiplexing and

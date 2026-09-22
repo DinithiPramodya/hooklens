@@ -221,7 +221,16 @@ table.headers td { padding: 0.2rem 0.5rem 0.2rem 0; vertical-align: top; }
 .t-punct, .t-count { color: var(--muted); }
 .t-cap { color: var(--err); }
 
-@media (max-width: 34rem) {
+/* A CONTAINER query, not a media query, and the difference is the bug it fixed.
+   The list lives in the left pane of a two-column layout, so on a wide screen
+   the viewport is wide while the list itself is narrow. Keyed on the viewport,
+   the stacked layout never kicked in there: the three `auto` columns took their
+   full width and the path's `1fr` track shrank to its min-content -- which
+   `overflow-wrap: anywhere` makes ONE CHARACTER, so `/hooks/stripe` rendered
+   vertically, a letter per line. Found by looking at the page while recording
+   the README demo; no test measures layout. */
+.captures { container-type: inline-size; }
+@container (max-width: 34rem) {
   .rowbtn { grid-template-columns: 3.5rem 1fr; }
   .badge { grid-column: 2; justify-self: start; }
   .size, .when { grid-column: 2; }
