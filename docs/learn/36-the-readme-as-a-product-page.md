@@ -220,3 +220,25 @@ Everything asserted on the page was verified against the code:
   right on GitHub", and only one of those has been tested.
 - **Still missing and not producible here:** the demo GIF. It is the most valuable
   thing on the page and it needs a screen recording.
+
+---
+
+## Postscript — recording the demo
+
+`docs/demo.gif` replaced the placeholder: a new inbox, a Stripe-style and a
+GitHub-style webhook arriving live without a refresh, and the Stripe payload expanded
+as a JSON tree. Six frames, 10.3 seconds a loop, 480 KB. Recorded in the browser
+only, so the `hooklens forward` terminal half of the story is not in it; the README's
+quickstart shows that output as text directly below.
+
+Two things the recording found, which is the argument for making one at all:
+
+- **The capture list rendered paths one letter per line.** The stacked row layout
+  keyed on the *viewport* width, but the list lives in a half-width pane, so on a
+  wide screen the list itself was narrow and never stacked. The path's `1fr` track
+  then shrank to its min-content — which `overflow-wrap: anywhere` makes a single
+  character. Fixed with a container query on the list's own width
+  (`web/src/index.css`). No test measures layout; this was found by looking.
+- **The footer still said "Phase 3".** A status line in the UI rots exactly like
+  the one this unit removed from the README. It now tells users that shift-click
+  compares two captures, which nothing else on the page mentioned.

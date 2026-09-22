@@ -138,7 +138,7 @@ database round trip.*
 
 **The rest of Phase 6**: the launch posts, which are the author's. `DECISIONS.md` is
 written — drafted from these notes at the author's request rather than by hand as
-`CLAUDE.md` intended. The demo GIF is still to be recorded.
+`CLAUDE.md` intended — and the demo GIF is recorded (`docs/demo.gif`).
 
 Dogfooding on a hosted instance is **deliberately not happening** — hosting costs
 money and this is a portfolio project. [39](39-where-it-runs.md) records what that

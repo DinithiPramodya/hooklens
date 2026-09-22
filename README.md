@@ -6,14 +6,7 @@ A public URL that captures every request byte-for-byte, streams them to a web UI
 they arrive, and forwards them to code running on `localhost`. Replay them, diff two
 deliveries, and check the provider's signature. One binary, self-hosted, no account.
 
-<!--
-  DEMO GIF GOES HERE, and it belongs above everything else.
-  A screen recording is the only element on this page that proves the thing works
-  rather than claiming it. ~15 seconds: run `hooklens forward`, curl the URL it
-  prints, the capture appears in the UI, expand the JSON tree.
-  Record it, drop it in docs/demo.gif, and replace this comment with:
-      ![hooklens capturing a webhook and forwarding it to localhost](docs/demo.gif)
--->
+![A new inbox receives a Stripe and a GitHub webhook live, and the Stripe payload is expanded as a JSON tree](docs/demo.gif)
 
 > **Not yet released.** The code is complete through hardening and MIT-licensed;
 > packaging is written but no version has been tagged — see
